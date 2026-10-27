@@ -8,7 +8,7 @@
 ## 一、安裝（只要做一次）
 
 ```bash
-git clone https://github.com/<你的帳號>/leling-scraper.git ~/leling-scraper
+git clone https://github.com/Tinghedy/leling-scraper.git ~/leling-scraper
 ```
 
 
