@@ -1,0 +1,9 @@
+# 抓下來的資料含第三方個資，不要上傳
+raw/
+output/
+state.json
+run.log
+cron.log
+
+__pycache__/
+.DS_Store
