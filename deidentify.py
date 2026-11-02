@@ -96,14 +96,62 @@ def scrub_text(text: str | None) -> str:
 _GROUP_POST_URL = re.compile(r"https?://(?:www\.|m\.)?facebook\.com/groups/[^/?#]+/(?:posts|permalink)/\d+/?")
 
 
+# 粉專貼文網址裡真正指向貼文的參數；其他（__cft__、__tn__ 等）是追蹤碼，拿掉
+_KEEP_PARAMS = {"story_fbid", "id", "fbid", "v", "set"}
+
+
 def _clean_url(url: str | None, is_group: bool) -> str | None:
-    """社團貼文只留「社團 + 貼文編號」形式的網址；其他形式可能夾帶個人 ID，就不留。"""
+    """社團貼文只留「社團 + 貼文編號」形式的網址；其他形式可能夾帶個人 ID，就不留。
+    粉專貼文保留指向貼文的參數（permalink.php?story_fbid=…&id=粉專ID），只拿掉追蹤碼。"""
     if not url:
         return None
     if is_group:
         m = _GROUP_POST_URL.match(url)
         return m.group(0) if m else None
-    return url.split("?")[0] if "profile.php" not in url else url
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    parts = urlsplit(url)
+    query = urlencode([(k, v) for k, v in parse_qsl(parts.query) if k in _KEEP_PARAMS])
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
+
+
+def post_number(feedback_id: str | None) -> str | None:
+    """agentic-facebook 的 id 是 Facebook 的 feedback ID（base64 的「feedback:貼文編號」）。"""
+    import base64
+
+    if not feedback_id:
+        return None
+    try:
+        raw = base64.b64decode(feedback_id + "=" * (-len(feedback_id) % 4)).decode("utf-8")
+    except Exception:
+        return None
+    num = raw.rsplit(":", 1)[-1]
+    return num if num.isdigit() or re.fullmatch(r"pfbid\w+", num) else None
+
+
+def page_ids_in(url: str | None) -> list[str]:
+    """從貼文網址找出粉專的數字 ID，例如 facebook.com/1000…/videos/… 或 permalink.php?…&id=1000…"""
+    if not url:
+        return []
+    m = re.search(r"facebook\.com/(\d{10,})/", url) or re.search(r"[?&]id=(\d+)", url)
+    return [m.group(1)] if m else []
+
+
+def repair_page_url(url: str | None, feedback_id: str | None, center_url: str,
+                    page_id: str | None = None) -> str | None:
+    """舊版去識別化把 permalink.php 後面的參數整段刪掉了。用貼文 id 和粉專 ID 重建。
+    page_id 是從同一間中心其他貼文網址看到的粉專 ID；沒有的話才從 centers.csv 的網址找。"""
+    if url and not re.fullmatch(r"https?://(?:www\.)?facebook\.com/(?:permalink|story)\.php/?", url):
+        return url
+    num = post_number(feedback_id)
+    if not num:
+        return url
+    if not page_id:
+        m = re.search(r"profile\.php\?id=(\d+)", center_url) or re.search(r"facebook\.com/(\d+)/?$", center_url)
+        page_id = m.group(1) if m else None
+    if page_id:
+        return f"https://www.facebook.com/permalink.php?story_fbid={num}&id={page_id}"
+    return center_url.rstrip("/") + f"/posts/{num}"
 
 
 def sanitize_post(post: dict, is_group: bool, is_course=None) -> dict:
@@ -146,6 +194,9 @@ def sanitize_post(post: dict, is_group: bool, is_course=None) -> dict:
         "source": post.get("source"),
         "captured_at": post.get("captured_at"),
     }
+    # 被轉貼的原文可能是個人發的，網址會帶著對方的帳號名稱，所以不留
+    if clean["shared_post"]:
+        clean["shared_post"]["url"] = None
     return clean
 
 

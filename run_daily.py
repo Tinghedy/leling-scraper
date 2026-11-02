@@ -26,16 +26,18 @@ import shutil
 import subprocess
 import sys
 import time
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from deidentify import sanitize_file, sanitize_post
+from deidentify import page_ids_in, repair_page_url, sanitize_file, sanitize_post
 
 # ──────────────────────────── 可以調整的設定 ────────────────────────────
 
 CENTERS_PER_RUN = 10               # 每天抓幾間
 SINCE = "2025-01-01"               # 第一次抓某間中心時，從哪一天開始抓
 MAX_POSTS_PER_CENTER = 300         # 每間最多抓幾則（安全上限）
+MAX_PAGES = 80                     # 粉專最多往回翻幾頁（agentic-facebook 預設只有 20 頁，約 60 則）
 GROUP_POSTS_PER_RUN = 50           # 社團沒有日期篩選，每次抓最新幾則
 WAIT_BETWEEN_CENTERS = (90, 240)   # 每間之間隨機等待幾秒（最小, 最大）
 
@@ -159,6 +161,7 @@ def fetch_one(cli: str, center: dict, state: dict) -> int:
         cmd = [cli, "fetch", center["url"],
                "--since", since,
                "--limit", str(MAX_POSTS_PER_CENTER),
+               "--max-pages", str(MAX_PAGES),
                "--output", str(out)]
         log(f"抓取 {center['name']}（{since} 之後）")
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -238,6 +241,7 @@ def sanitize_existing(centers: list[dict]) -> None:
 def build_outputs(centers: list[dict]) -> tuple[int, int]:
     """把 raw/ 裡所有檔案合併、去重，輸出 CSV。每次都從頭重建，所以改了關鍵字重跑就會生效。"""
     posts: dict[str, dict] = {}
+    seen_page_ids: dict[str, Counter] = {}
     for f in sorted(RAW_DIR.glob("*.json")):
         c = center_for_file(f, centers)
         group = is_group(c) if c else True
@@ -249,6 +253,9 @@ def build_outputs(centers: list[dict]) -> tuple[int, int]:
         for p in items:
             # 舊版檔案還沒去識別化的話，先在記憶體裡處理，輸出才不會帶到個資
             p = sanitize_post(p, group, looks_like_course)
+            if c and not group:
+                seen_page_ids.setdefault(c["url"], Counter()).update(page_ids_in(p.get("url")))
+                p["_center_url"] = c["url"]
             key = p.get("id") or p.get("url")
             if not key:
                 continue
@@ -256,11 +263,18 @@ def build_outputs(centers: list[dict]) -> tuple[int, int]:
             p["_staff"] = c["staff"] if c else set()
             posts[key] = p  # 較新的檔案覆蓋舊的（互動數會更新）
 
+    # 補回被截斷的粉專連結：優先用貼文網址裡看到的粉專 ID，centers.csv 的網址只當備用
+    for p in posts.values():
+        if p.get("_center_url"):
+            seen = seen_page_ids.get(p["_center_url"])
+            page_id = seen.most_common(1)[0][0] if seen else None
+            p["url"] = repair_page_url(p.get("url"), p.get("id"), p["_center_url"], page_id)
+
     rows = []
     for p in posts.values():
         text = (p.get("text") or "").strip()
         shared = p.get("shared_post") or {}
-        if not text and isinstance(shared, dict):
+        if not text and isinstance(shared, dict) and not p.get("text_dropped"):
             text = (shared.get("text") or "").strip()
         hits = [k for k in COURSE_KEYWORDS if k in text]
         topics = [t for t, kws in TOPICS.items() if any(k in text for k in kws)]
