@@ -7,3 +7,7 @@ cron.log
 
 __pycache__/
 .DS_Store
+
+# 去識別化代號的金鑰：外流的話代號就能被反推
+.pseudonym_key
+*.tmp

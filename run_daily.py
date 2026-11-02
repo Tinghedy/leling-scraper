@@ -9,6 +9,9 @@
        output/all_posts.csv   全部貼文
        output/courses.csv     判定為課程相關的貼文（用關鍵字篩選，可自行調整）
 
+抓下來的資料一寫進硬碟就先去識別化（見 deidentify.py）：發文者換成代號、
+圖片只留數量、內文遮蔽電話與 Email 等。原始的姓名與 Facebook ID 不會留在電腦上。
+
 第一次抓某間中心時，從 SINCE 日期開始抓；之後再輪到它時，只抓上次之後的新貼文。
 
 需要：Python 3.9+，以及已完成登入的 agentic-facebook（見 README.md）
@@ -26,6 +29,8 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from deidentify import sanitize_file, sanitize_post
+
 # ──────────────────────────── 可以調整的設定 ────────────────────────────
 
 CENTERS_PER_RUN = 10               # 每天抓幾間
@@ -39,6 +44,10 @@ COURSE_KEYWORDS = [
     "課程", "上課", "開課", "課表", "報名", "招生", "講座", "研習",
     "工作坊", "體驗班", "學員", "講師", "老師", "堂課", "第一堂", "成果",
 ]
+
+def looks_like_course(text: str) -> bool:
+    return any(k in (text or "") for k in COURSE_KEYWORDS)
+
 
 # 課程主題標記：一則貼文可以同時有多個標記，純粹方便之後分類，可自由增刪
 TOPICS = {
@@ -93,6 +102,9 @@ def load_centers() -> list[dict]:
     for r in rows:
         r["name"] = (r.get("name") or "").strip() or r["url"].strip()
         r["url"] = r["url"].strip()
+        # staff：社團裡屬於中心工作人員的代號（例如「成員-3fa91c」），多個用頓號或分號隔開
+        raw_staff = (r.get("staff") or "").replace(";", "、").replace("；", "、")
+        r["staff"] = {s.strip() for s in raw_staff.split("、") if s.strip()}
     if not rows:
         sys.exit("centers.csv 裡沒有任何網址。")
     return rows
@@ -115,6 +127,10 @@ def pick_today(centers: list[dict], state: dict) -> list[dict]:
     return candidates[:CENTERS_PER_RUN]
 
 
+def is_group(center: dict) -> bool:
+    return "/groups/" in center["url"]
+
+
 def slug(center: dict) -> str:
     """把網址變成檔名用的代號。profile.php?id=123 這種網址要保留 id，不然會撞名。"""
     url = center["url"].rstrip("/")
@@ -132,7 +148,7 @@ def fetch_one(cli: str, center: dict, state: dict) -> int:
     # 檔名帶時間：同一天重跑也不會覆蓋掉先前抓到的資料
     out = RAW_DIR / f"{slug(center)}_{datetime.now(TAIPEI):%Y%m%d-%H%M%S}.json"
 
-    if "/groups/" in center["url"]:
+    if is_group(center):
         # 社團沒有日期篩選：改抓最新 N 則，重複的在合併時去掉
         cmd = [cli, "group", center["url"],
                "--sort", "recent",
@@ -155,6 +171,14 @@ def fetch_one(cli: str, center: dict, state: dict) -> int:
     info["last_exit_code"] = code
 
     if code in (OK, SINCE_UNCONFIRMED):
+        # 一抓下來就去識別化，原始的姓名與 ID 不落地
+        try:
+            sanitize_file(out, is_group(center), looks_like_course)
+        except Exception as e:  # 檔案壞掉就不要留著含個資的原檔
+            log(f"  ✗ 去識別化失敗（{e}），刪除這次的原始檔，下次再抓")
+            out.unlink(missing_ok=True)
+            save_state(state)
+            return ERROR
         n = count_posts(out)
         log(f"  ✓ {n} 則" + ("（日期範圍可能沒抓完整，下次會再補）" if code == SINCE_UNCONFIRMED else ""))
         # 只有完整抓到日期範圍才往前推進，沒抓完整的下次會從同一天再抓一次
@@ -194,22 +218,42 @@ def to_taipei(iso: str | None) -> str:
         return iso
 
 
+def center_for_file(f: Path, centers: list[dict]) -> dict | None:
+    by_slug = {slug(c): c for c in centers}
+    return by_slug.get(f.stem.rsplit("_", 1)[0])
+
+
+def sanitize_existing(centers: list[dict]) -> None:
+    """把舊版留下、還含有姓名與 ID 的 raw 檔就地改寫成去識別化版本。無法復原。"""
+    done = 0
+    for f in sorted(RAW_DIR.glob("*.json")):
+        c = center_for_file(f, centers)
+        # 找不到對應中心時當成社團處理，寧可多遮
+        n = sanitize_file(f, is_group(c) if c else True, looks_like_course)
+        done += 1
+        log(f"  已去識別化 {f.name}（{n} 則）")
+    log(f"共處理 {done} 個檔案")
+
+
 def build_outputs(centers: list[dict]) -> tuple[int, int]:
     """把 raw/ 裡所有檔案合併、去重，輸出 CSV。每次都從頭重建，所以改了關鍵字重跑就會生效。"""
-    name_by_slug = {slug(c): c["name"] for c in centers}
     posts: dict[str, dict] = {}
     for f in sorted(RAW_DIR.glob("*.json")):
-        center_name = name_by_slug.get(f.stem.rsplit("_", 1)[0], f.stem)
+        c = center_for_file(f, centers)
+        group = is_group(c) if c else True
         try:
             items = json.loads(f.read_text(encoding="utf-8"))
         except Exception:
             log(f"  略過無法讀取的檔案 {f.name}")
             continue
         for p in items:
+            # 舊版檔案還沒去識別化的話，先在記憶體裡處理，輸出才不會帶到個資
+            p = sanitize_post(p, group, looks_like_course)
             key = p.get("id") or p.get("url")
             if not key:
                 continue
-            p["_center"] = center_name
+            p["_center"] = c["name"] if c else f.stem
+            p["_staff"] = c["staff"] if c else set()
             posts[key] = p  # 較新的檔案覆蓋舊的（互動數會更新）
 
     rows = []
@@ -220,14 +264,21 @@ def build_outputs(centers: list[dict]) -> tuple[int, int]:
             text = (shared.get("text") or "").strip()
         hits = [k for k in COURSE_KEYWORDS if k in text]
         topics = [t for t, kws in TOPICS.items() if any(k in text for k in kws)]
+        author = p.get("author") or ""
+        if author in p["_staff"]:
+            author = "中心人員"
+        # 社團成員的非課程貼文：只留時間與互動數，內文不留
+        if p.get("text_dropped") or (author.startswith("成員-") and not hits):
+            text = "（社團成員的非課程貼文，內文不保留）"
         rows.append({
             "中心": p["_center"],
+            "發文者": author,
             "發文時間": to_taipei(p.get("created_at")),
             "課程相關": "是" if hits else "",
             "命中關鍵字": "、".join(hits),
             "主題標記": "、".join(topics),
             "內文": text,
-            "圖片數": len(p.get("media") or []),
+            "圖片數": p.get("media_count") or 0,
             "心情數": p.get("reaction_count") or 0,
             "留言數": p.get("comment_count") or 0,
             "分享數": p.get("share_count") or 0,
@@ -251,6 +302,12 @@ def build_outputs(centers: list[dict]) -> tuple[int, int]:
 def main() -> None:
     RAW_DIR.mkdir(exist_ok=True)
     centers = load_centers()
+
+    if "--sanitize-existing" in sys.argv:
+        sanitize_existing(centers)
+        total, n_course = build_outputs(centers)
+        log(f"重新整理完成：共 {total} 則貼文，其中 {n_course} 則課程相關")
+        return
 
     if "--merge-only" in sys.argv:
         total, n_course = build_outputs(centers)
