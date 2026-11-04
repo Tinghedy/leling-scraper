@@ -1,10 +1,11 @@
 """
 台南樂齡課程搜尋。只在本機執行，不要部署或公開分享。
 
-  手動篩選（日期、星期、時段、主題、行政區）→ 地圖（一個中心一個圓點，面積 ∝ 符合的課數，
-  顏色 = 該中心最多的主題）＋課程清單＋原文連結
+  手動篩選（日期、星期、時段、主題）＋「我住在」→ 行政區地圖（住的區深色、相鄰區淺色、其他灰色，
+  每區標出符合條件的課數；點一區只看那區的課，再點一次取消）＋課程清單＋原文連結
 
-資料：data/courses.json（import_courses.py 從 leling-courses 的樂齡課程.xlsx 轉出）、centers.csv（geocode_centers.py 補了座標）
+資料：data/courses.json（import_courses.py 從 leling-courses 的樂齡課程.xlsx 轉出）、centers.csv（中心所在的行政區）、
+      tainan_map.json（build_map.py 從 taiwaneseOMG 的 Figma 地圖設計稿轉出）
 不呼叫任何模型，也不需要 API 金鑰。口語查詢（Gemini 把一句話轉成篩選條件）先拿掉了，
 要加回來可以參考 commit f918c89 的 app.py。
 啟動：uv run --python 3.12 --with-requirements requirements.txt streamlit run app.py
@@ -15,16 +16,15 @@ from __future__ import annotations
 import csv
 import html
 import json
-import math
 from datetime import date, datetime
 from pathlib import Path
 
-import pydeck as pdk
 import streamlit as st
 
 BASE = Path(__file__).resolve().parent
 COURSES = BASE / "data" / "courses.json"
 CENTERS = BASE / "centers.csv"
+MAP = BASE / "tainan_map.json"
 
 # 和 extract.py 相同（不 import extract，因為它會載入 Gemini 的 SDK）
 DOMAINS = ["數位科技", "健康運動", "藝術手作", "音樂表演", "語言文化", "生活財務", "社區志工"]
@@ -32,11 +32,43 @@ WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"]
 SLOTS = {"morning": "上午", "afternoon": "下午", "evening": "晚上"}
 FIELD_ZH = {"course_name": "課名", "weekday": "星期", "start_time": "開始時間", "end_time": "結束時間",
             "start_date": "開始日期", "end_date": "結束日期", "venue": "地點"}
-# 色盲友善的配色（Okabe–Ito）；沒有符合課程的中心用淡灰色
-COLORS = {"數位科技": [0, 114, 178], "健康運動": [0, 158, 115], "藝術手作": [213, 94, 0],
-          "音樂表演": [204, 121, 167], "語言文化": [230, 159, 0], "生活財務": [86, 180, 233],
-          "社區志工": [90, 90, 90]}
-NO_DOMAIN, EMPTY = [130, 130, 130], [205, 205, 205]
+# 地圖：住的區深藍、相鄰區淺藍、其他區灰色（同一色系的深淺，不靠紅綠區分）；選到的區加橘色粗框
+MAP_CSS = """
+.map { max-width: 780px; margin: 0 auto; }
+svg { width: 100%; height: auto; display: block; }
+.d { cursor: pointer; outline: none; }
+.a { stroke: #fff; stroke-width: 1.2; }
+.l { fill: none; stroke: #fff; stroke-width: 1.2; }
+.home .a { fill: #08519c; } .near .a { fill: #9ecae1; } .other .a { fill: #dcdcdc; }
+.d:hover .a, .d:focus-visible .a { filter: brightness(0.85); }
+.picked .a { stroke: #e66100; stroke-width: 4; }
+.t { font: 700 11px "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif; text-anchor: middle;
+     pointer-events: none; fill: #111; paint-order: stroke; stroke: #fff; stroke-width: 3px; }
+.t.home { fill: #fff; stroke: #08519c; }
+"""
+# 點一區（或用鍵盤 Enter）就把區名傳回 Python
+MAP_JS = """
+export default function(component) {
+    const { data, setTriggerValue, parentElement } = component;
+    let box = parentElement.querySelector(".map");
+    if (!box) {
+        box = document.createElement("div");
+        box.className = "map";
+        parentElement.appendChild(box);
+    }
+    box.innerHTML = data;
+    box.querySelectorAll("[data-name]").forEach((g) => {
+        g.onclick = () => setTriggerValue("clicked", g.dataset.name);
+        g.onkeydown = (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setTriggerValue("clicked", g.dataset.name);
+            }
+        };
+    });
+}
+"""
+district_map = st.components.v2.component("tainan_district_map", css=MAP_CSS, js=MAP_JS)
 SOURCE_ZH = {"moe_doc": "教育部樂齡學習網公告", "fb_post": "FB 貼文"}
 
 # 台南 37 區的相鄰關係：由內政部鄉鎮界線（taiwan-atlas towns-10t）算出，邊界有共用頂點就算相鄰
@@ -101,6 +133,30 @@ def load_courses(mtime: float) -> list[dict]:
 
 
 @st.cache_data
+def load_map() -> dict:
+    return json.loads(MAP.read_text(encoding="utf-8"))
+
+
+def map_svg(home: str, near: set[str], counts: dict[str, int], picked: str | None) -> str:
+    """區名都來自 tainan_map.json（固定的 37 區），不含使用者輸入。"""
+    m = load_map()
+    groups, labels = [], []
+    # 選到的區最後畫，粗框才不會被鄰區蓋住
+    for d in sorted(m["districts"], key=lambda d: d["name"] == picked):
+        name, n = d["name"], counts.get(d["name"], 0)
+        tier = "home" if name == home else "near" if name in near else "other"
+        paths = "".join(f'<path class="a" d="{p}"/>' for p in d["areas"]) + \
+            "".join(f'<path class="l" d="{p}"/>' for p in d["lines"])
+        groups.append(f'<g class="d {tier}{" picked" if name == picked else ""}" data-name="{name}" tabindex="0" '
+                      f'role="button" aria-label="{name}，{n} 門課"><title>{name}：{n} 門</title>{paths}</g>')
+        x, y = d["label"]
+        labels.append(f'<text class="t {tier}" x="{x}" y="{y}"><tspan x="{x}" dy="-0.15em">{name}</tspan>'
+                      f'<tspan x="{x}" dy="1.15em">{n}</tspan></text>')
+    return (f'<svg viewBox="0 0 {m["width"]} {m["height"]}" aria-label="臺南市行政區地圖">'
+            + "".join(groups) + "".join(labels) + "</svg>")
+
+
+@st.cache_data
 def load_centers() -> list[dict]:
     with CENTERS.open(encoding="utf-8-sig", newline="") as f:
         return [r for r in csv.DictReader(f) if r.get("lat") and r.get("lng")]
@@ -110,14 +166,14 @@ def no_time(c: dict) -> bool:
     return not c.get("dates") or not c["weekday"] or not c["start_time"]
 
 
-def matches(c: dict, days: list, wd: list, slot: list, dom: list, dist: list, keep_no_time: bool) -> bool:
+def matches(c: dict, days: list, wd: list, slot: list, dom: list, keep_no_time: bool) -> bool:
     """keep_no_time：原文沒寫日期、星期（或時間）的課，不被日期、星期（或時段）條件刷掉。"""
     if no_time(c) and not keep_no_time:
         return False
     return ((not days or set(c.get("dates") or []) & set(days) or (keep_no_time and not c.get("dates")))
             and (not wd or set(c["weekday"]) & set(wd) or (keep_no_time and not c["weekday"]))
             and (not slot or c["time_slot"] in slot or (keep_no_time and not c["start_time"]))
-            and (not dom or c["domain"] in dom) and (not dist or c["district"] in dist))
+            and (not dom or c["domain"] in dom))
 
 
 def md(d: str) -> str:
@@ -141,7 +197,7 @@ def when(c: dict) -> str:
     return f"{days} {t}"
 
 
-for k, v in (("f_date", []), ("f_weekday", []), ("f_slot", []), ("f_domain", []), ("f_district", []), ("map_key", 0)):
+for k, v in (("f_date", []), ("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", "東區"), ("picked", None)):
     st.session_state.setdefault(k, v)
 
 st.title("台南樂齡課程搜尋")
@@ -158,43 +214,35 @@ days = c0.multiselect("日期", all_dates, key="f_date", format_func=md, placeho
 wd = c1.multiselect("星期", WEEKDAYS, key="f_weekday", format_func=lambda w: "週" + w)
 slot = c2.multiselect("時段", list(SLOTS), key="f_slot", format_func=SLOTS.get)
 dom = c3.multiselect("主題", DOMAINS, key="f_domain")
-dist = c4.multiselect("行政區", DISTRICTS, key="f_district")
+home = c4.selectbox("我住在", DISTRICTS, key="home")
 keep_no_time = st.checkbox("包含沒寫日期／星期／時間的課", value=True)
 
-hits = [c for c in courses if matches(c, days, wd, slot, dom, dist, keep_no_time)]
+hits = [c for c in courses if matches(c, days, wd, slot, dom, keep_no_time)]
 
-# ── 地圖 ──
-points = []
-for ctr in centers:
-    mine = [c for c in hits if c["center"] == ctr["name"]]
-    top = max(DOMAINS, key=lambda d: sum(c["domain"] == d for c in mine)) if mine else None
-    color = (COLORS[top] if top and any(c["domain"] == top for c in mine) else NO_DOMAIN) if mine else EMPTY
-    points.append({"name": ctr["name"], "count": len(mine), "lat": float(ctr["lat"]), "lng": float(ctr["lng"]),
-                   "radius": 350 * math.sqrt(len(mine)) if mine else 250,  # 面積和課數成正比
-                   "color": color + [230 if mine else 140],
-                   "top": top or ("沒有符合的課" if not mine else "主題沒判斷")})
-layer = pdk.Layer("ScatterplotLayer", data=points, id="centers", get_position="[lng, lat]",
-                  get_radius="radius", radius_units="meters", get_fill_color="color",
-                  get_line_color=[40, 40, 40], line_width_min_pixels=1, stroked=True, pickable=True)
-deck = pdk.Deck(layers=[layer], initial_view_state=pdk.ViewState(latitude=23.12, longitude=120.32, zoom=9),
-                tooltip={"text": "{name}\n符合的課：{count} 門\n最多的主題：{top}"})
-event = st.pydeck_chart(deck, on_select="rerun", selection_mode="single-object",
-                        key=f"map{st.session_state.map_key}", height=520)
-st.caption("顏色＝該中心最多的主題：" + "　".join(f"{d}" for d in DOMAINS) + "　灰色＝沒有符合的課。點圓點只看那間中心的課。")
-picked = None
-sel = (event.selection or {}).get("objects", {}).get("centers") if event else None
-if sel:
-    picked = sel[0]["name"]
+# ── 地圖：行政區分層設色 ──
+near = set(NEIGHBORS.get(home, []))
+picked = st.session_state.picked
+counts: dict[str, int] = {}
+for c in hits:
+    counts[c["district"]] = counts.get(c["district"], 0) + 1
+result = district_map(data=map_svg(home, near, counts, picked), key="district_map", on_clicked_change=lambda: None)
+if result.clicked:  # 點同一區＝取消，點別區＝換過去
+    st.session_state.picked = None if result.clicked == picked else result.clicked
+    st.rerun()
+st.caption(f"深藍＝你住的{home}，淺藍＝相鄰的區，灰色＝其他區；區名下的數字是符合目前條件的課數。"
+           "點一區只看那區的課，再點一次取消。")
 
 # ── 課程清單 ──
-shown = [c for c in hits if not picked or c["center"] == picked]
-head = f"符合條件的課：{len(shown)} 門" + (f"（只看 {picked}）" if picked else "")
+shown = [c for c in hits if not picked or c["district"] == picked]
+head = f"符合條件的課：{len(shown)} 門" + (f"（只看{picked}）" if picked else "")
 st.subheader(head)
-if picked and st.button("看全部中心的課"):
-    st.session_state.map_key += 1
+if picked and st.button("看全部行政區的課"):
+    st.session_state.picked = None
     st.rerun()
 rows = []
-for c in sorted(shown, key=lambda c: (c["start_date"] or "9999", c["center"])):
+# 住的區排最前面，再來相鄰區，其他區最後；同一層照開課日期
+tier = lambda c: 0 if c["district"] == home else 1 if c["district"] in near else 2  # noqa: E731
+for c in sorted(shown, key=lambda c: (tier(c), c["start_date"] or "9999", c["center"])):
     inf = "、".join(FIELD_ZH.get(f, f) for f in c["inferred_fields"])
     link = f'<a href="{html.escape(c["source_url"])}" target="_blank" rel="noopener">原文</a>' if c["source_url"] else ""
     rows.append("<tr>" + "".join(f"<td>{x}</td>" for x in (

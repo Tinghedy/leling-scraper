@@ -1,6 +1,5 @@
 google-genai>=2.34
 pydantic>=2.0
-streamlit>=1.40
-pydeck>=0.9
+streamlit>=1.66  # st.components.v2（地圖點擊）
 pandas>=2.0
 openpyxl>=3.1
