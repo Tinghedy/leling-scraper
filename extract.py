@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-用 Claude 從課程貼文抽出結構化的課程，給 app.py 的搜尋 dashboard 用。
+用 Gemini 從課程貼文抽出結構化的課程，給 app.py 的搜尋 dashboard 用。
 
 輸入：output/courses.csv（run_daily.py 產生的課程相關貼文）；有本機課表圖片的貼文，圖片一起送給模型看
 輸出：data/courses.json（一門課一筆），快取在 data/cache/（以貼文網址當 key，重跑不重複呼叫）
+      回應不符合 schema 或呼叫失敗的貼文記在 data/extract_failures.jsonl（只記貼文網址和錯誤種類）
 
 去識別化：輸出只有下面 FIELDS 的欄位。不存發文者，講師一律空值；模型被要求不要把人名、電話
 寫進任何欄位，程式再把看起來像電話、「某某老師」的字樣拿掉。執行時只印數字，不印貼文內容。
 
-需要：環境變數 ANTHROPIC_API_KEY
+模型、每分鐘請求數、價格在 llm.py 最上方。
+需要：環境變數 GEMINI_API_KEY
 用法：
   uv run --python 3.12 --with-requirements requirements.txt python extract.py --limit 10
   ... extract.py --since 2026-09-01 --no-images
@@ -17,18 +19,22 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import csv
 import hashlib
 import json
 import re
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
+from typing import Literal, Optional
 
-import anthropic
+from google.genai import errors
+from pydantic import BaseModel, Field
 
-MODEL = "claude-sonnet-5-5"
-MAX_TOKENS = 16000
+import llm
+from llm import MODEL
+
 MAX_IMAGES = 6  # 一則貼文最多送幾張圖
 
 BASE = Path(__file__).resolve().parent
@@ -36,56 +42,44 @@ POSTS = BASE / "output" / "courses.csv"
 CENTERS = BASE / "centers.csv"
 OUT = BASE / "data" / "courses.json"
 CACHE = BASE / "data" / "cache"
+FAILURES = BASE / "data" / "extract_failures.jsonl"
 
 # 和 run_daily.py 的 TOPICS 相同的 7 類
 DOMAINS = ["數位科技", "健康運動", "藝術手作", "音樂表演", "語言文化", "生活財務", "社區志工"]
 WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"]
-# 可以被標成「推論」的欄位；domain 是分類，本來就是判斷出來的，不算
-INFERABLE = ["course_name", "weekday", "start_time", "end_time", "start_date", "end_date", "venue"]
 FIELDS = ["center", "district", "lat", "lng", "course_name", "weekday", "start_time", "end_time", "time_slot",
           "start_date", "end_date", "venue", "domain", "instructor", "inferred_fields", "source_url",
           "source_type", "post_date"]
 
+Weekday = Literal["一", "二", "三", "四", "五", "六", "日"]
+Domain = Literal["數位科技", "健康運動", "藝術手作", "音樂表演", "語言文化", "生活財務", "社區志工"]
+# 可以被標成「推論」的欄位；domain 是分類，本來就是判斷出來的，不算
+Inferable = Literal["course_name", "weekday", "start_time", "end_time", "start_date", "end_date", "venue"]
 
-def nullable(schema: dict) -> dict:
-    return {"anyOf": [schema, {"type": "null"}]}
+
+class Course(BaseModel):
+    course_name: str
+    weekday: list[Weekday]
+    start_time: Optional[str] = Field(description="HH:MM，24 小時制")
+    end_time: Optional[str] = Field(description="HH:MM，24 小時制")
+    start_date: Optional[str] = Field(description="YYYY-MM-DD")
+    end_date: Optional[str] = Field(description="YYYY-MM-DD")
+    venue: Optional[str]
+    domain: Optional[Domain]
+    inferred_fields: list[Inferable]
+    source_type: Literal["text", "image"]
 
 
-SCHEMA = {
-    "type": "object",
-    "properties": {
-        "courses": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "course_name": {"type": "string"},
-                    "weekday": {"type": "array", "items": {"type": "string", "enum": WEEKDAYS}},
-                    "start_time": nullable({"type": "string", "description": "HH:MM，24 小時制"}),
-                    "end_time": nullable({"type": "string", "description": "HH:MM，24 小時制"}),
-                    "start_date": nullable({"type": "string", "description": "YYYY-MM-DD"}),
-                    "end_date": nullable({"type": "string", "description": "YYYY-MM-DD"}),
-                    "venue": nullable({"type": "string"}),
-                    "domain": nullable({"type": "string", "enum": DOMAINS}),
-                    "inferred_fields": {"type": "array", "items": {"type": "string", "enum": INFERABLE}},
-                    "source_type": {"type": "string", "enum": ["text", "image"]},
-                },
-                "required": ["course_name", "weekday", "start_time", "end_time", "start_date", "end_date",
-                             "venue", "domain", "inferred_fields", "source_type"],
-                "additionalProperties": False,
-            },
-        }
-    },
-    "required": ["courses"],
-    "additionalProperties": False,
-}
+class Extraction(BaseModel):
+    courses: list[Course]
+
 
 SYSTEM = f"""你負責從台南樂齡學習中心的 Facebook 貼文（和附上的課表圖片）抽出「課程公告」裡的課程。
 
 規則：
 - 一則貼文可以有 0 到多門課。不是課程公告的貼文（成果分享、上課花絮、活動照片、新聞轉貼、節日問候等）回傳 courses: []。
 - 原文沒寫的欄位一律填 null（weekday 填 []），不要用常識補。
-- 任何不是原文直接寫出來、而是你推論的值（例如從日期算出星期、從「今天」換算日期、從課名判斷 domain、只寫月日時補年份以外的推論），把欄位名稱列進 inferred_fields。照發文日期補年份不算推論。
+- 任何不是原文直接寫出來、而是你推論的值（例如從日期算出星期、從「今天」換算日期），把欄位名稱列進 inferred_fields。照發文日期補年份不算推論。
 - weekday 用「一」到「日」，可以多個。時間用 24 小時制 HH:MM（「下午2點」→ 14:00）。日期用 YYYY-MM-DD。
 - 課程有好幾堂時，start_date 是第一堂、end_date 是最後一堂。
 - domain 從這 7 類選一個：{"、".join(DOMAINS)}；判斷不出來填 null。domain 是分類，不用列進 inferred_fields。
@@ -118,37 +112,21 @@ def cache_key(row: dict) -> str:
     return hashlib.sha1(key.encode()).hexdigest()
 
 
-def image_blocks(row: dict) -> list[dict]:
+def image_parts(row: dict) -> list[dict]:
     out = []
     for rel in [p for p in row.get("圖片路徑", "").split("；") if p][:MAX_IMAGES]:
         path = BASE / rel
-        if not path.exists():
-            continue
-        media = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
-        out.append({"type": "image", "source": {"type": "base64", "media_type": media,
-                                                 "data": base64.standard_b64encode(path.read_bytes()).decode()}})
+        if path.exists():
+            mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+            out.append(llm.image_part(path.read_bytes(), mime))
     return out
 
 
-def call_llm(client: anthropic.Anthropic, row: dict, images: list[dict]) -> list[dict]:
+def extract_post(row: dict, images: list[dict]) -> list[dict]:
     text = (f"中心：{row['中心']}\n發文日期：{row['發文時間'][:10]}\n"
             f"附上的課表圖片：{len(images)} 張\n\n貼文內文：\n{row['內文']}")
-    response = client.beta.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        # 安全分類器拒答時，由伺服器自動改用其他模型重跑
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-        system=[{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}],
-        output_config={"format": {"type": "json_schema", "schema": SCHEMA}},
-        messages=[{"role": "user", "content": images + [{"type": "text", "text": text}]}],
-    )
-    if response.stop_reason == "refusal":
-        raise RuntimeError("模型拒答")
-    if response.stop_reason == "max_tokens":
-        raise RuntimeError("輸出太長被截斷")
-    body = next(b.text for b in response.content if b.type == "text")
-    return json.loads(body)["courses"]
+    result = llm.generate(SYSTEM, images + [{"type": "text", "text": text}], Extraction)
+    return [c.model_dump() for c in result.courses]
 
 
 def load_centers() -> dict[str, dict]:
@@ -171,6 +149,12 @@ def to_record(c: dict, row: dict, center: dict) -> dict:
     return {k: rec[k] for k in FIELDS}
 
 
+def log_failure(row: dict, error: str) -> None:
+    with FAILURES.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"at": datetime.now().isoformat(timespec="seconds"), "source_url": row["連結"].strip(),
+                            "error": error}, ensure_ascii=False) + "\n")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="只處理前 N 則（先小量測試）")
@@ -186,26 +170,25 @@ def main() -> None:
         rows = rows[:args.limit]
     centers = load_centers()
     CACHE.mkdir(parents=True, exist_ok=True)
-    client = anthropic.Anthropic()
 
-    records, failed, called = [], 0, 0
+    records, failed, started = [], 0, time.time()
     for i, row in enumerate(rows, 1):
         path = CACHE / f"{cache_key(row)}.json"
         if path.exists():
             courses = json.loads(path.read_text(encoding="utf-8"))["courses"]
         else:
-            images = image_blocks(row) if args.images else []
+            images = image_parts(row) if args.images else []
             try:
-                courses = call_llm(client, row, images)
-            except TypeError as e:  # SDK 找不到金鑰時丟 TypeError：每一則都會失敗，直接停
-                if "authentication" in str(e):
-                    sys.exit("沒有 API 金鑰：請先 export ANTHROPIC_API_KEY=...")
+                courses = extract_post(row, images)
+            except ValueError as e:  # genai.Client() 找不到金鑰
+                if "API key" in str(e) or "api_key" in str(e):
+                    sys.exit("沒有 API 金鑰：請先 export GEMINI_API_KEY=...")
                 raise
-            except (anthropic.APIError, RuntimeError, json.JSONDecodeError, StopIteration) as e:
+            except (llm.SchemaError, errors.APIError, RuntimeError) as e:
                 failed += 1
+                log_failure(row, f"{type(e).__name__}: {e}"[:300])
                 print(f"  第 {i} 則失敗：{type(e).__name__}", file=sys.stderr)
                 continue
-            called += 1
             path.write_text(json.dumps({"model": MODEL, "images": len(images), "courses": courses},
                                        ensure_ascii=False), encoding="utf-8")
         records += [to_record(c, row, centers.get(row["中心"], {})) for c in courses]
@@ -214,9 +197,10 @@ def main() -> None:
 
     OUT.write_text(json.dumps(records, ensure_ascii=False, indent=1), encoding="utf-8")
     n_inf = sum(1 for r in records if r["inferred_fields"])
-    print(f"處理 {len(rows)} 則貼文（呼叫模型 {called} 次，其餘用快取），抽出 {len(records)} 門課，"
-          f"有 inferred 欄位 {n_inf / len(records):.0%}，失敗 {failed} 則" if records else
-          f"處理 {len(rows)} 則貼文，沒有抽出課程，失敗 {failed} 則")
+    print(f"處理 {len(rows)} 則貼文（呼叫模型 {llm.USAGE['requests']} 次，其餘用快取），抽出 {len(records)} 門課，"
+          + (f"有 inferred 欄位 {n_inf / len(records):.0%}，" if records else "") + f"失敗 {failed} 則")
+    print(f"模型 {MODEL}；token 輸入 {llm.USAGE['input_tokens']:,}、輸出 {llm.USAGE['output_tokens']:,}，"
+          f"付費價約 US${llm.cost_usd():.3f}；耗時 {time.time() - started:.0f} 秒")
 
 
 if __name__ == "__main__":

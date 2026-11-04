@@ -1,11 +1,11 @@
 """
 台南樂齡課程搜尋（T1：用一句話找課）。只在本機執行，不要部署或公開分享。
 
-  輸入一句話（例如「週一早上、運動、東區附近」）→ Claude 轉成篩選條件 → 可以手動修正
+  輸入一句話（例如「週一早上、運動、東區附近」）→ Gemini 轉成篩選條件 → 可以手動修正
   → 地圖（一個中心一個圓點，面積 ∝ 符合的課數，顏色 = 該中心最多的主題）＋課程清單
 
 資料：data/courses.json（extract.py 產生）、centers.csv（geocode_centers.py 補了座標）
-需要：環境變數 ANTHROPIC_API_KEY（只有「轉成篩選條件」會用到，手動篩選不需要）
+需要：環境變數 GEMINI_API_KEY（只有「轉成篩選條件」會用到，手動篩選不需要）
 啟動：uv run --python 3.12 --with-requirements requirements.txt streamlit run app.py
 """
 
@@ -17,12 +17,15 @@ import json
 import math
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
-import anthropic
 import pydeck as pdk
 import streamlit as st
+from google.genai import errors
+from pydantic import BaseModel
 
-from extract import DOMAINS, MODEL, WEEKDAYS
+import llm
+from extract import DOMAINS, WEEKDAYS, Domain, Weekday
 
 BASE = Path(__file__).resolve().parent
 COURSES = BASE / "data" / "courses.json"
@@ -79,18 +82,17 @@ NEIGHBORS = {
 }
 DISTRICTS = sorted(NEIGHBORS)
 
-QUERY_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "weekday": {"type": "array", "items": {"type": "string", "enum": WEEKDAYS}},
-        "time_slot": {"type": "array", "items": {"type": "string", "enum": list(SLOTS)}},
-        "domain": {"type": "array", "items": {"type": "string", "enum": DOMAINS}},
-        "district": {"type": "array", "items": {"type": "string", "enum": DISTRICTS}},
-        "near": {"type": "boolean"},
-    },
-    "required": ["weekday", "time_slot", "domain", "district", "near"],
-    "additionalProperties": False,
-}
+District = Literal[tuple(DISTRICTS)]  # type: ignore[valid-type]
+
+
+class QueryFilter(BaseModel):
+    weekday: list[Weekday]
+    time_slot: list[Literal["morning", "afternoon", "evening"]]
+    domain: list[Domain]
+    district: list[District]
+    near: bool
+
+
 QUERY_SYSTEM = f"""把使用者找樂齡課程的一句話，轉成篩選條件。沒提到的條件填空陣列。
 - weekday：「一」到「日」。「平日」＝一到五，「週末」＝六、日。
 - time_slot：早上、上午 → morning；中午過後、下午 → afternoon；晚上 → evening。
@@ -124,17 +126,7 @@ def load_centers() -> list[dict]:
 
 
 def parse_query(q: str) -> dict:
-    client = anthropic.Anthropic()
-    response = client.beta.messages.create(
-        model=MODEL, max_tokens=4000,
-        betas=["server-side-fallback-2026-07-01"], fallbacks="default",
-        system=QUERY_SYSTEM,
-        output_config={"format": {"type": "json_schema", "schema": QUERY_SCHEMA}},
-        messages=[{"role": "user", "content": q}],
-    )
-    if response.stop_reason in ("refusal", "max_tokens"):
-        raise RuntimeError("模型沒有給出篩選條件")
-    return json.loads(next(b.text for b in response.content if b.type == "text"))
+    return llm.generate(QUERY_SYSTEM, [{"type": "text", "text": q}], QueryFilter).model_dump()
 
 
 def on_query() -> None:
@@ -144,12 +136,12 @@ def on_query() -> None:
         return
     try:
         f = parse_query(q)
-    except TypeError as e:  # SDK 找不到金鑰時丟 TypeError
-        if "authentication" not in str(e):
+    except ValueError as e:  # genai.Client() 找不到金鑰
+        if "API key" not in str(e):
             raise
-        st.session_state.query_error = "沒有設定 ANTHROPIC_API_KEY，AI 轉換不能用，請直接用下面的選單篩選。"
+        st.session_state.query_error = "沒有設定 GEMINI_API_KEY，AI 轉換不能用，請直接用下面的選單篩選。"
         return
-    except (anthropic.APIError, RuntimeError, json.JSONDecodeError, StopIteration) as e:
+    except (llm.SchemaError, errors.APIError, RuntimeError) as e:
         st.session_state.query_error = f"AI 沒辦法轉換這句話（{type(e).__name__}），請直接用下面的選單篩選。"
         return
     districts = set(f["district"])
