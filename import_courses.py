@@ -9,6 +9,7 @@
   source_url   「貼文連結」：教育部公告網址，或 FB 貼文網址（教育部＋FB 的課只留教育部的）
 
 去識別化：講師一律空值；課名、地點裡的講師姓名、電話、「某某老師」拿掉；不帶發文者、圖片路徑。
+「（整則貼文：沒有抽出課程）」這類複查台的佔位列不是課，不轉進來。
 domain 用 run_daily.py 的 TOPICS 關鍵字比對課名，比對不到填 null。
 inferred_fields：AI 讀圖時推測的課名、地點，以及「只寫星期，照月份展開」的日期。
 
@@ -28,6 +29,7 @@ from extract import FIELDS, WEEKDAYS, scrub, time_slot
 BASE = Path(__file__).resolve().parent
 SOURCE = Path.home() / "Downloads/leling-courses/output/樂齡課程.xlsx"
 SHEET = "課程"
+PLACEHOLDER = "（整則貼文"
 CENTERS = BASE / "centers.csv"
 OUT = BASE / "data" / "courses.json"
 
@@ -107,13 +109,16 @@ def main() -> None:
     with CENTERS.open(encoding="utf-8-sig", newline="") as f:
         centers = {r["name"]: r for r in csv.DictReader(f)}
     others = known_names(courses)
+    # 「（整則貼文：沒有抽出課程）」是複查台用的佔位列，不是課
+    placeholders = sum((c.get("課名") or "").startswith(PLACEHOLDER) for c in courses)
+    courses = [c for c in courses if not (c.get("課名") or "").startswith(PLACEHOLDER)]
     records = [to_record(c, centers.get(c["中心"], {}), others) for c in courses]
     dropped = sum(not r["course_name"] for r in records)  # 課名整個是人名或空白
     records = [r for r in records if r["course_name"]]
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text(json.dumps(records, ensure_ascii=False, indent=1), encoding="utf-8")
     missing = sorted({r["center"] for r in records if r["lat"] is None})
-    print(f"{len(records)} 門課（課名去掉人名後是空的，跳過 {dropped} 門），{len({r['center'] for r in records})} 間中心 → data/courses.json")
+    print(f"{len(records)} 門課（佔位列跳過 {placeholders} 列；課名去掉人名後是空的，跳過 {dropped} 門），{len({r['center'] for r in records})} 間中心 → data/courses.json")
     print("來源：" + "、".join(f"{k} {sum(r['source_type'] == k for r in records)}" for k in ("moe_doc", "fb_post")))
     print(f"沒寫星期 {sum(not r['weekday'] for r in records)} 門、沒寫開始時間 {sum(not r['start_time'] for r in records)} 門、"
           f"有 inferred 欄位 {sum(bool(r['inferred_fields']) for r in records)} 門、domain 比對不到 "
