@@ -21,7 +21,7 @@ from google import genai
 from google.genai import errors
 from pydantic import BaseModel, ValidationError
 
-MODEL = "gemini-3.6-flash"   # 目前 stable 的 Flash；最新的是 gemini-3.8-flash（標示 New）
+MODEL = "gemini-3.6-flash"   # 2026-11-04 用 models.list() 和實際呼叫確認：免費額度可以用
 # 免費額度的限制依專案而定，官方文件（aistudio.google.com/docs/rate-limits，2026-11-04 查）不列數字，
 # 只說到 AI Studio 的 rate limit 頁面看自己的額度。先設 5，低於過去公開過的免費額度最低 RPM；
 # 看到自己專案的實際數字後再調整。超過時會收到 429，generate() 會照 retryDelay 等待重試。
