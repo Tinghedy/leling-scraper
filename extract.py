@@ -197,6 +197,10 @@ def main() -> None:
             images = image_blocks(row) if args.images else []
             try:
                 courses = call_llm(client, row, images)
+            except TypeError as e:  # SDK 找不到金鑰時丟 TypeError：每一則都會失敗，直接停
+                if "authentication" in str(e):
+                    sys.exit("沒有 API 金鑰：請先 export ANTHROPIC_API_KEY=...")
+                raise
             except (anthropic.APIError, RuntimeError, json.JSONDecodeError, StopIteration) as e:
                 failed += 1
                 print(f"  第 {i} 則失敗：{type(e).__name__}", file=sys.stderr)
