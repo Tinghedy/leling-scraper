@@ -4,7 +4,8 @@
 當作 app.py 的課程資料。只做欄位轉換，不呼叫任何模型。
 
 輸入：../leling-courses/output/樂齡課程.xlsx 的「課程」工作表（一列一門課）
-輸出：data/courses.json，欄位和 extract.py 相同（FIELDS）
+輸出：data/courses.json，欄位是 extract.py 的 FIELDS 再加 dates
+  dates        每一堂的日期（「上課日期」欄，YYYY-MM-DD 的清單）；原文沒寫日期的是 []
   source_type  「來源」有教育部的 → moe_doc；「僅 FB」→ fb_post
   source_url   「貼文連結」：教育部公告網址，或 FB 貼文網址（教育部＋FB 的課只留教育部的）
 
@@ -25,6 +26,8 @@ from datetime import datetime
 from pathlib import Path
 
 from extract import FIELDS, WEEKDAYS, scrub, time_slot
+
+OUT_FIELDS = FIELDS[:FIELDS.index("end_date") + 1] + ["dates"] + FIELDS[FIELDS.index("end_date") + 1:]
 
 BASE = Path(__file__).resolve().parent
 SOURCE = Path.home() / "Downloads/leling-courses/output/樂齡課程.xlsx"
@@ -96,12 +99,13 @@ def to_record(c: dict, center: dict, others: set[str]) -> dict:
         "start_time": c.get("開始時間") or None, "end_time": c.get("結束時間") or None,
         "time_slot": time_slot(c.get("開始時間")),
         "start_date": day(c.get("第一堂")), "end_date": day(c.get("最後一堂")),
+        "dates": [d for d in (c.get("上課日期") or "").split("、") if d],
         "venue": clean(c.get("地點"), names), "domain": domain_of(name), "instructor": None,
         "inferred_fields": sorted(inferred), "source_url": c.get("貼文連結") or None,
         "source_type": "moe_doc" if "教育部" in (c.get("來源") or "") else "fb_post",
         "post_date": day(c.get("發文時間")),
     }
-    return {k: rec[k] for k in FIELDS}
+    return {k: rec[k] for k in OUT_FIELDS}
 
 
 def main() -> None:

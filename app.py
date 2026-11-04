@@ -1,7 +1,7 @@
 """
 台南樂齡課程搜尋。只在本機執行，不要部署或公開分享。
 
-  手動篩選（星期、時段、主題、行政區）→ 地圖（一個中心一個圓點，面積 ∝ 符合的課數，
+  手動篩選（日期、星期、時段、主題、行政區）→ 地圖（一個中心一個圓點，面積 ∝ 符合的課數，
   顏色 = 該中心最多的主題）＋課程清單＋原文連結
 
 資料：data/courses.json（import_courses.py 從 leling-courses 的樂齡課程.xlsx 轉出）、centers.csv（geocode_centers.py 補了座標）
@@ -16,7 +16,7 @@ import csv
 import html
 import json
 import math
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pydeck as pdk
@@ -107,16 +107,32 @@ def load_centers() -> list[dict]:
 
 
 def no_time(c: dict) -> bool:
-    return not c["weekday"] or not c["start_time"]
+    return not c.get("dates") or not c["weekday"] or not c["start_time"]
 
 
-def matches(c: dict, wd: list, slot: list, dom: list, dist: list, keep_no_time: bool) -> bool:
-    """keep_no_time：原文沒寫星期（或時間）的課，不被星期（或時段）條件刷掉。"""
+def matches(c: dict, days: list, wd: list, slot: list, dom: list, dist: list, keep_no_time: bool) -> bool:
+    """keep_no_time：原文沒寫日期、星期（或時間）的課，不被日期、星期（或時段）條件刷掉。"""
     if no_time(c) and not keep_no_time:
         return False
-    return ((not wd or set(c["weekday"]) & set(wd) or (keep_no_time and not c["weekday"]))
+    return ((not days or set(c.get("dates") or []) & set(days) or (keep_no_time and not c.get("dates")))
+            and (not wd or set(c["weekday"]) & set(wd) or (keep_no_time and not c["weekday"]))
             and (not slot or c["time_slot"] in slot or (keep_no_time and not c["start_time"]))
             and (not dom or c["domain"] in dom) and (not dist or c["district"] in dist))
+
+
+def md(d: str) -> str:
+    """2026-10-08 → 10/8（三）"""
+    y, m, dd = (int(x) for x in d.split("-"))
+    return f"{m}/{dd}（{WEEKDAYS[date(y, m, dd).weekday()]}）"
+
+
+def date_text(c: dict) -> str:
+    ds = c.get("dates") or []
+    if not ds:
+        return "日期沒寫"
+    if len(ds) <= 4:
+        return "、".join(md(d).split("（")[0] for d in ds)
+    return f"{md(ds[0]).split('（')[0]}～{md(ds[-1]).split('（')[0]}，共 {len(ds)} 堂"
 
 
 def when(c: dict) -> str:
@@ -125,7 +141,7 @@ def when(c: dict) -> str:
     return f"{days} {t}"
 
 
-for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("f_district", []), ("map_key", 0)):
+for k, v in (("f_date", []), ("f_weekday", []), ("f_slot", []), ("f_domain", []), ("f_district", []), ("map_key", 0)):
     st.session_state.setdefault(k, v)
 
 st.title("台南樂齡課程搜尋")
@@ -136,14 +152,16 @@ courses = load_courses(COURSES.stat().st_mtime)
 centers = load_centers()
 
 st.markdown("**篩選條件**")
-c1, c2, c3, c4 = st.columns(4)
+all_dates = sorted({d for c in courses for d in c.get("dates") or []})
+c0, c1, c2, c3, c4 = st.columns(5)
+days = c0.multiselect("日期", all_dates, key="f_date", format_func=md, placeholder="例如 10/8")
 wd = c1.multiselect("星期", WEEKDAYS, key="f_weekday", format_func=lambda w: "週" + w)
 slot = c2.multiselect("時段", list(SLOTS), key="f_slot", format_func=SLOTS.get)
 dom = c3.multiselect("主題", DOMAINS, key="f_domain")
 dist = c4.multiselect("行政區", DISTRICTS, key="f_district")
-keep_no_time = st.checkbox("包含沒寫星期／時間的課", value=True)
+keep_no_time = st.checkbox("包含沒寫日期／星期／時間的課", value=True)
 
-hits = [c for c in courses if matches(c, wd, slot, dom, dist, keep_no_time)]
+hits = [c for c in courses if matches(c, days, wd, slot, dom, dist, keep_no_time)]
 
 # ── 地圖 ──
 points = []
@@ -181,11 +199,11 @@ for c in sorted(shown, key=lambda c: (c["start_date"] or "9999", c["center"])):
     link = f'<a href="{html.escape(c["source_url"])}" target="_blank" rel="noopener">原文</a>' if c["source_url"] else ""
     rows.append("<tr>" + "".join(f"<td>{x}</td>" for x in (
         html.escape(c["course_name"] or "")
-        + ('<br><span class="warn">⚠ 原文未註明時間</span>' if no_time(c) else "")
+        + ('<br><span class="warn">⚠ 原文未註明日期／時間</span>' if no_time(c) else "")
         + (f'<br><span class="warn">⚠ 推論（原文沒明寫）：{html.escape(inf)}</span>' if inf else ""),
-        html.escape(c["center"].replace("樂齡學習中心", "")), html.escape(when(c)), html.escape(c["venue"] or "沒寫"),
+        html.escape(c["center"].replace("樂齡學習中心", "")), html.escape(date_text(c)), html.escape(when(c)), html.escape(c["venue"] or "沒寫"),
         html.escape(c["domain"] or "—"), link)) + "</tr>")
-st.markdown('<table class="courses"><tr><th>課名</th><th>中心</th><th>星期與時間</th><th>地點</th><th>主題</th>'
+st.markdown('<table class="courses"><tr><th>課名</th><th>中心</th><th>日期</th><th>星期與時間</th><th>地點</th><th>主題</th>'
             '<th>原文</th></tr>' + "".join(rows) + "</table>" if rows else "沒有符合的課，請放寬條件。",
             unsafe_allow_html=True)
 
@@ -196,7 +214,7 @@ for c in courses:
     by_source[c["source_type"]] = by_source.get(c["source_type"], 0) + 1
 st.sidebar.markdown("**資料來源**\n" + "".join(f"- {SOURCE_ZH.get(k, k)}：**{n}** 門\n" for k, n in by_source.items()))
 st.sidebar.markdown(f"- 中心：**{len({c['center'] for c in courses})}** / {len(centers)} 間\n- 課程：**{len(courses)}** 門\n"
-                    f"- 沒寫星期或時間：{sum(no_time(c) for c in courses)} 門\n"
+                    f"- 沒寫日期、星期或時間：{sum(no_time(c) for c in courses)} 門\n"
                     f"- 資料更新：**{datetime.fromtimestamp(COURSES.stat().st_mtime):%Y-%m-%d}**\n"
                     f"- 貼文日期：{min(c['post_date'] for c in courses)} ～ {max(c['post_date'] for c in courses)}")
-st.sidebar.caption("⚠ 表示原文沒寫時間，或這個欄位是推論的（AI 讀圖或照月份展開日期），請點「原文」確認。")
+st.sidebar.caption("⚠ 表示原文沒寫日期或時間，或這個欄位是推論的（AI 讀圖或照月份展開日期），請點「原文」確認。")
