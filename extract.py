@@ -9,6 +9,10 @@
 去識別化：輸出只有下面 FIELDS 的欄位。不存發文者，講師一律空值；模型被要求不要把人名、電話
 寫進任何欄位，程式再把看起來像電話、「某某老師」的字樣拿掉。執行時只印數字，不印貼文內容。
 
+隱私：目前只用 Gemini 免費額度（Google 會用送進去的內容改善產品），FB 貼文含發文者、留言、
+人名電話等個資，不能送。SEND_FB_POSTS = False 時一執行就停下，不讀貼文、不呼叫模型。
+demo 的課程資料改用教育部來源（import_moe.py）。
+
 模型、每分鐘請求數、價格在 llm.py 最上方。
 需要：環境變數 GEMINI_API_KEY
 用法：
@@ -36,6 +40,8 @@ import llm
 from llm import MODEL
 
 MAX_IMAGES = 6  # 一則貼文最多送幾張圖
+# 改成付費帳號（資料不會被拿去改善產品）且確認過去識別化之前，不要打開
+SEND_FB_POSTS = False
 
 BASE = Path(__file__).resolve().parent
 POSTS = BASE / "output" / "courses.csv"
@@ -162,6 +168,8 @@ def main() -> None:
     ap.add_argument("--images", action=argparse.BooleanOptionalAction, default=True,
                     help="有本機課表圖片的貼文，圖片一起送給模型（--no-images 只送文字）")
     args = ap.parse_args()
+    if not SEND_FB_POSTS:
+        sys.exit("FB 貼文含個資，不能送免費額度")
 
     with POSTS.open(encoding="utf-8-sig", newline="") as f:
         rows = [r for r in csv.DictReader(f) if r["發文時間"][:10] >= args.since]
