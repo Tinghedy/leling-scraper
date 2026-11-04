@@ -1,0 +1,4 @@
+anthropic>=1.0
+streamlit>=1.40
+pydeck>=0.9
+pandas>=2.0
