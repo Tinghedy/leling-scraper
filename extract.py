@@ -40,7 +40,8 @@ CACHE = BASE / "data" / "cache"
 # 和 run_daily.py 的 TOPICS 相同的 7 類
 DOMAINS = ["數位科技", "健康運動", "藝術手作", "音樂表演", "語言文化", "生活財務", "社區志工"]
 WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"]
-LLM_FIELDS = ["course_name", "weekday", "start_time", "end_time", "start_date", "end_date", "venue", "domain"]
+# 可以被標成「推論」的欄位；domain 是分類，本來就是判斷出來的，不算
+INFERABLE = ["course_name", "weekday", "start_time", "end_time", "start_date", "end_date", "venue"]
 FIELDS = ["center", "district", "lat", "lng", "course_name", "weekday", "start_time", "end_time", "time_slot",
           "start_date", "end_date", "venue", "domain", "instructor", "inferred_fields", "source_url",
           "source_type", "post_date"]
@@ -66,7 +67,7 @@ SCHEMA = {
                     "end_date": nullable({"type": "string", "description": "YYYY-MM-DD"}),
                     "venue": nullable({"type": "string"}),
                     "domain": nullable({"type": "string", "enum": DOMAINS}),
-                    "inferred_fields": {"type": "array", "items": {"type": "string", "enum": LLM_FIELDS}},
+                    "inferred_fields": {"type": "array", "items": {"type": "string", "enum": INFERABLE}},
                     "source_type": {"type": "string", "enum": ["text", "image"]},
                 },
                 "required": ["course_name", "weekday", "start_time", "end_time", "start_date", "end_date",
@@ -87,7 +88,7 @@ SYSTEM = f"""你負責從台南樂齡學習中心的 Facebook 貼文（和附上
 - 任何不是原文直接寫出來、而是你推論的值（例如從日期算出星期、從「今天」換算日期、從課名判斷 domain、只寫月日時補年份以外的推論），把欄位名稱列進 inferred_fields。照發文日期補年份不算推論。
 - weekday 用「一」到「日」，可以多個。時間用 24 小時制 HH:MM（「下午2點」→ 14:00）。日期用 YYYY-MM-DD。
 - 課程有好幾堂時，start_date 是第一堂、end_date 是最後一堂。
-- domain 從這 7 類選一個：{"、".join(DOMAINS)}；判斷不出來填 null。domain 一定是推論，要列進 inferred_fields。
+- domain 從這 7 類選一個：{"、".join(DOMAINS)}；判斷不出來填 null。domain 是分類，不用列進 inferred_fields。
 - source_type：這門課是從貼文文字讀的填 text，從圖片讀的填 image。
 - 去識別化：course_name 和 venue 不要包含任何人名（講師、學員、工作人員）、電話、Email、LINE ID。"""
 
