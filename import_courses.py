@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
-把教育部樂齡學習網的課程（leling-courses 程式讀表格、AI 讀圖片後整理好的結果）轉成 data/courses.json，
-當作 app.py 的課程資料。不呼叫任何模型。
+把 leling-courses 整理好的完整課程資料庫（教育部樂齡學習網＋FB）轉成 data/courses.json，
+當作 app.py 的課程資料。只做欄位轉換，不呼叫任何模型。
 
-輸入：../leling-courses/output/review/data.json 裡「來源」是教育部的課（教育部樂齡學習網、教育部＋FB）
-輸出：data/courses.json，欄位和 extract.py 相同（FIELDS），source_type = "moe_doc"
+輸入：../leling-courses/output/樂齡課程.xlsx 的「課程」工作表（一列一門課）
+輸出：data/courses.json，欄位和 extract.py 相同（FIELDS）
+  source_type  「來源」有教育部的 → moe_doc；「僅 FB」→ fb_post
+  source_url   「貼文連結」：教育部公告網址，或 FB 貼文網址（教育部＋FB 的課只留教育部的）
 
-去識別化：講師一律空值；課名、地點裡的講師姓名、電話、「某某老師」拿掉。FB 貼文連結不帶過來，
-source_url 只放教育部公告網址。
+去識別化：講師一律空值；課名、地點裡的講師姓名、電話、「某某老師」拿掉；不帶發文者、圖片路徑。
 domain 用 run_daily.py 的 TOPICS 關鍵字比對課名，比對不到填 null。
 inferred_fields：AI 讀圖時推測的課名、地點，以及「只寫星期，照月份展開」的日期。
 
-用法：python3 import_moe.py
+用法：uv run --python 3.12 --with-requirements requirements.txt python import_courses.py
 """
 
 from __future__ import annotations
@@ -19,15 +20,16 @@ from __future__ import annotations
 import csv
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 
 from extract import FIELDS, WEEKDAYS, scrub, time_slot
 
 BASE = Path(__file__).resolve().parent
-SOURCE = Path.home() / "Downloads/leling-courses/output/review/data.json"
+SOURCE = Path.home() / "Downloads/leling-courses/output/樂齡課程.xlsx"
+SHEET = "課程"
 CENTERS = BASE / "centers.csv"
 OUT = BASE / "data" / "courses.json"
-MOE_SOURCES = {"教育部樂齡學習網", "教育部＋FB"}
 
 # 和 run_daily.py 的 TOPICS 相同（run_daily.py 不 import，避免執行它的設定）
 TOPICS = {
@@ -67,7 +69,18 @@ def clean(v: str | None, names: list[str] | set[str]) -> str | None:
     return scrub(v)
 
 
-def to_record(c: dict, post: dict, center: dict, others: set[str]) -> dict:
+def day(v) -> str | None:
+    return v.strftime("%Y-%m-%d") if isinstance(v, datetime) else (str(v)[:10] if v else None)
+
+
+def read_sheet() -> list[dict]:
+    from openpyxl import load_workbook  # 只有轉檔時需要
+    rows = load_workbook(SOURCE, read_only=True)[SHEET].iter_rows(values_only=True)
+    head = next(rows)
+    return [dict(zip(head, r)) for r in rows if any(r)]
+
+
+def to_record(c: dict, center: dict, others: set[str]) -> dict:
     names = [n.strip() for n in (c.get("講師") or "").replace("、", ",").split(",") if n.strip()] + sorted(others)
     inferred = {AI_FIELDS[f] for f in (c.get("AI 推測的欄位") or "").split("、") if f in AI_FIELDS}
     if "照" in (c.get("推定") or "") and "展開" in c["推定"]:
@@ -80,27 +93,28 @@ def to_record(c: dict, post: dict, center: dict, others: set[str]) -> dict:
         "course_name": name, "weekday": [w for w in WEEKDAYS if w in (c.get("星期") or "")],
         "start_time": c.get("開始時間") or None, "end_time": c.get("結束時間") or None,
         "time_slot": time_slot(c.get("開始時間")),
-        "start_date": c.get("第一堂") or None, "end_date": c.get("最後一堂") or None,
+        "start_date": day(c.get("第一堂")), "end_date": day(c.get("最後一堂")),
         "venue": clean(c.get("地點"), names), "domain": domain_of(name), "instructor": None,
-        "inferred_fields": sorted(inferred), "source_url": post.get("link") or None,
-        "source_type": "moe_doc", "post_date": (c.get("發文時間") or "")[:10] or None,
+        "inferred_fields": sorted(inferred), "source_url": c.get("貼文連結") or None,
+        "source_type": "moe_doc" if "教育部" in (c.get("來源") or "") else "fb_post",
+        "post_date": day(c.get("發文時間")),
     }
     return {k: rec[k] for k in FIELDS}
 
 
 def main() -> None:
-    data = json.loads(SOURCE.read_text(encoding="utf-8"))
+    courses = read_sheet()
     with CENTERS.open(encoding="utf-8-sig", newline="") as f:
         centers = {r["name"]: r for r in csv.DictReader(f)}
-    courses = [c for c in data["courses"] if c["來源"] in MOE_SOURCES]
-    others = known_names(data["courses"])
-    records = [to_record(c, data["posts"].get(c["post"], {}), centers.get(c["中心"], {}), others) for c in courses]
+    others = known_names(courses)
+    records = [to_record(c, centers.get(c["中心"], {}), others) for c in courses]
     dropped = sum(not r["course_name"] for r in records)  # 課名整個是人名或空白
     records = [r for r in records if r["course_name"]]
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text(json.dumps(records, ensure_ascii=False, indent=1), encoding="utf-8")
     missing = sorted({r["center"] for r in records if r["lat"] is None})
     print(f"{len(records)} 門課（課名去掉人名後是空的，跳過 {dropped} 門），{len({r['center'] for r in records})} 間中心 → data/courses.json")
+    print("來源：" + "、".join(f"{k} {sum(r['source_type'] == k for r in records)}" for k in ("moe_doc", "fb_post")))
     print(f"沒寫星期 {sum(not r['weekday'] for r in records)} 門、沒寫開始時間 {sum(not r['start_time'] for r in records)} 門、"
           f"有 inferred 欄位 {sum(bool(r['inferred_fields']) for r in records)} 門、domain 比對不到 "
           f"{sum(r['domain'] is None for r in records)} 門")

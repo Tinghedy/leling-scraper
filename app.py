@@ -1,12 +1,12 @@
 """
-台南樂齡課程搜尋（T1：用一句話找課）。只在本機執行，不要部署或公開分享。
+台南樂齡課程搜尋。只在本機執行，不要部署或公開分享。
 
-  輸入一句話（例如「週一早上、運動、東區附近」）→ Gemini 轉成篩選條件 → 可以手動修正
-  → 地圖（一個中心一個圓點，面積 ∝ 符合的課數，顏色 = 該中心最多的主題）＋課程清單
+  手動篩選（星期、時段、主題、行政區）→ 地圖（一個中心一個圓點，面積 ∝ 符合的課數，
+  顏色 = 該中心最多的主題）＋課程清單＋原文連結
 
-資料：data/courses.json（目前由 import_moe.py 從教育部樂齡學習網的公告產生）、centers.csv（geocode_centers.py 補了座標）
-需要：環境變數 GEMINI_API_KEY（只有「轉成篩選條件」會用到，手動篩選不需要）
-隱私：送給 Gemini 的只有使用者輸入的那一句查詢，課程資料不會送出。
+資料：data/courses.json（import_courses.py 從 leling-courses 的樂齡課程.xlsx 轉出）、centers.csv（geocode_centers.py 補了座標）
+不呼叫任何模型，也不需要 API 金鑰。口語查詢（Gemini 把一句話轉成篩選條件）先拿掉了，
+要加回來可以參考 commit f918c89 的 app.py。
 啟動：uv run --python 3.12 --with-requirements requirements.txt streamlit run app.py
 """
 
@@ -18,20 +18,17 @@ import json
 import math
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
 
 import pydeck as pdk
 import streamlit as st
-from google.genai import errors
-from pydantic import BaseModel
-
-import llm
-from extract import DOMAINS, WEEKDAYS, Domain, Weekday
 
 BASE = Path(__file__).resolve().parent
 COURSES = BASE / "data" / "courses.json"
 CENTERS = BASE / "centers.csv"
 
+# 和 extract.py 相同（不 import extract，因為它會載入 Gemini 的 SDK）
+DOMAINS = ["數位科技", "健康運動", "藝術手作", "音樂表演", "語言文化", "生活財務", "社區志工"]
+WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"]
 SLOTS = {"morning": "上午", "afternoon": "下午", "evening": "晚上"}
 FIELD_ZH = {"course_name": "課名", "weekday": "星期", "start_time": "開始時間", "end_time": "結束時間",
             "start_date": "開始日期", "end_date": "結束日期", "venue": "地點"}
@@ -40,7 +37,7 @@ COLORS = {"數位科技": [0, 114, 178], "健康運動": [0, 158, 115], "藝術�
           "音樂表演": [204, 121, 167], "語言文化": [230, 159, 0], "生活財務": [86, 180, 233],
           "社區志工": [90, 90, 90]}
 NO_DOMAIN, EMPTY = [130, 130, 130], [205, 205, 205]
-SOURCE_ZH = {"moe_doc": "教育部樂齡學習網公告", "text": "FB 貼文文字", "image": "FB 貼文圖片"}
+SOURCE_ZH = {"moe_doc": "教育部樂齡學習網公告", "fb_post": "FB 貼文"}
 
 # 台南 37 區的相鄰關係：由內政部鄉鎮界線（taiwan-atlas towns-10t）算出，邊界有共用頂點就算相鄰
 NEIGHBORS = {
@@ -84,24 +81,6 @@ NEIGHBORS = {
 }
 DISTRICTS = sorted(NEIGHBORS)
 
-District = Literal[tuple(DISTRICTS)]  # type: ignore[valid-type]
-
-
-class QueryFilter(BaseModel):
-    weekday: list[Weekday]
-    time_slot: list[Literal["morning", "afternoon", "evening"]]
-    domain: list[Domain]
-    district: list[District]
-    near: bool
-
-
-QUERY_SYSTEM = f"""把使用者找樂齡課程的一句話，轉成篩選條件。沒提到的條件填空陣列。
-- weekday：「一」到「日」。「平日」＝一到五，「週末」＝六、日。
-- time_slot：早上、上午 → morning；中午過後、下午 → afternoon；晚上 → evening。
-- domain：從 {"、".join(DOMAINS)} 選，可以多個（例如「運動」→ 健康運動，「手機」→ 數位科技，「唱歌」→ 音樂表演）。
-- district：台南市的行政區，要寫成「東區」「永康區」這種完整名稱。
-- near：使用者說「附近」「周邊」「旁邊」時填 true（程式會再加上相鄰的行政區），否則 false。"""
-
 st.set_page_config(page_title="台南樂齡課程搜尋", layout="wide")
 # 使用者是長者和家屬：字放大、對比加深
 st.markdown("""<style>
@@ -127,37 +106,6 @@ def load_centers() -> list[dict]:
         return [r for r in csv.DictReader(f) if r.get("lat") and r.get("lng")]
 
 
-def parse_query(q: str) -> dict:
-    return llm.generate(QUERY_SYSTEM, [{"type": "text", "text": q}], QueryFilter).model_dump()
-
-
-def on_query() -> None:
-    """按下「找課」：把 AI 轉出的條件填進下面的選單（選單在這之後才畫，所以可以直接改 session_state）。"""
-    q = st.session_state.q.strip()
-    if not q:
-        return
-    try:
-        f = parse_query(q)
-    except ValueError as e:  # genai.Client() 找不到金鑰
-        if "API key" not in str(e):
-            raise
-        st.session_state.query_error = "沒有設定 GEMINI_API_KEY，AI 轉換不能用，請直接用下面的選單篩選。"
-        return
-    except (llm.SchemaError, errors.APIError, RuntimeError) as e:
-        st.session_state.query_error = f"AI 沒辦法轉換這句話（{type(e).__name__}），請直接用下面的選單篩選。"
-        return
-    districts = set(f["district"])
-    if f["near"]:
-        districts |= {n for d in f["district"] for n in NEIGHBORS.get(d, [])}
-    st.session_state.update({
-        "f_weekday": f["weekday"], "f_slot": f["time_slot"], "f_domain": f["domain"],
-        "f_district": sorted(districts), "query_error": "",
-        "query_note": "已加上相鄰的行政區：" + "、".join(sorted(districts - set(f["district"])))
-        if f["near"] and districts - set(f["district"]) else "",
-    })
-    st.session_state.map_key += 1  # 換條件時清掉地圖上點選的中心
-
-
 def no_time(c: dict) -> bool:
     return not c["weekday"] or not c["start_time"]
 
@@ -177,32 +125,23 @@ def when(c: dict) -> str:
     return f"{days} {t}"
 
 
-for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("f_district", []), ("map_key", 0),
-             ("query_error", ""), ("query_note", "")):
+for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("f_district", []), ("map_key", 0)):
     st.session_state.setdefault(k, v)
 
 st.title("台南樂齡課程搜尋")
 if not COURSES.exists():
-    st.warning("還沒有課程資料。請先執行 import_moe.py 產生 data/courses.json。")
+    st.warning("還沒有課程資料。請先執行 import_courses.py 產生 data/courses.json。")
     st.stop()
 courses = load_courses(COURSES.stat().st_mtime)
 centers = load_centers()
 
-with st.form("query"):
-    st.text_input("想找什麼課？用一句話說就好", key="q", placeholder="例如：週一早上、運動、東區附近")
-    st.form_submit_button("找課", on_click=on_query)
-if st.session_state.query_error:
-    st.error(st.session_state.query_error)
-
-st.markdown("**篩選條件**（AI 判斷的結果，可以直接改）")
+st.markdown("**篩選條件**")
 c1, c2, c3, c4 = st.columns(4)
 wd = c1.multiselect("星期", WEEKDAYS, key="f_weekday", format_func=lambda w: "週" + w)
 slot = c2.multiselect("時段", list(SLOTS), key="f_slot", format_func=SLOTS.get)
 dom = c3.multiselect("主題", DOMAINS, key="f_domain")
 dist = c4.multiselect("行政區", DISTRICTS, key="f_district")
 keep_no_time = st.checkbox("包含沒寫星期／時間的課", value=True)
-if st.session_state.query_note:
-    st.caption(st.session_state.query_note)
 
 hits = [c for c in courses if matches(c, wd, slot, dom, dist, keep_no_time)]
 
