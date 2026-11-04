@@ -22,7 +22,10 @@ from google.genai import errors
 from pydantic import BaseModel, ValidationError
 
 MODEL = "gemini-3.6-flash"   # 目前 stable 的 Flash；最新的是 gemini-3.8-flash（標示 New）
-REQUESTS_PER_MINUTE = 10     # 免費額度保守一點；付費帳號可以調高
+# 免費額度的限制依專案而定，官方文件（aistudio.google.com/docs/rate-limits，2026-11-04 查）不列數字，
+# 只說到 AI Studio 的 rate limit 頁面看自己的額度。先設 5，低於過去公開過的免費額度最低 RPM；
+# 看到自己專案的實際數字後再調整。超過時會收到 429，generate() 會照 retryDelay 等待重試。
+REQUESTS_PER_MINUTE = 5
 MAX_RETRIES = 6
 # 每百萬 token 的美元價格（Gemini 3.6 Flash 付費版，2026 年底前）；免費額度不收費
 PRICE_INPUT, PRICE_OUTPUT = 0.75, 3.75
