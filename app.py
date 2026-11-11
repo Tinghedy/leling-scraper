@@ -200,6 +200,13 @@ def load_courses(mtime: float) -> list[dict]:
 
 
 @st.cache_data
+def data_updated(mtime: float) -> str:
+    """資料更新日期：courses.json 是課程清單，沒有記錄更新日期的欄位，
+    所以用合併前全部資料中最新一筆貼文或公告的日期（post_date）。不用檔案修改時間（部署後會變成部署當天）。"""
+    return max((c.get("post_date") or "" for c in json.loads(COURSES.read_text(encoding="utf-8"))), default="") or "不明"
+
+
+@st.cache_data
 def load_map() -> dict:
     return json.loads(MAP.read_text(encoding="utf-8"))
 
@@ -519,7 +526,7 @@ with st.expander("關於這份資料"):
     st.markdown(f"- 中心：**{len({c['center'] for c in courses})}** / {len(centers)} 間\n"
                 f"- 課程：**{len(courses)}** 門（同一門課的重複公告已合併）\n"
                 f"- 沒寫日期、星期或時間：{sum(no_time(c) for c in courses)} 門\n"
-                f"- 資料更新：**{datetime.fromtimestamp(COURSES.stat().st_mtime):%Y-%m-%d}**\n"
+                f"- 資料更新：**{data_updated(COURSES.stat().st_mtime)}**（資料中最新一筆貼文或公告的日期）\n"
                 f"- 貼文日期：{min(c['post_date'] for c in courses)} ～ {max(c['post_date'] for c in courses)}")
     st.caption("⚠ 表示原文沒寫日期或時間，或這個欄位是推論的（AI 讀圖或照月份展開日期），請點「原文」確認。"
                if SHOW_INFERRED else "⚠ 表示原文沒寫上課日期或時間，請打電話向中心確認，或點「原文」看貼文。")
