@@ -39,6 +39,10 @@ MAP = BASE / "tainan_map.json"
 DOMAINS = ["數位科技", "健康運動", "藝術手作", "音樂表演", "語言文化", "生活財務", "社區志工"]
 WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"]
 SLOTS = {"morning": "上午", "afternoon": "下午", "evening": "晚上"}
+# 主題標籤的圖示：全站統一用 Material Symbols（Streamlit 內建的 :material/…: 語法）
+ALL = "全部"
+DOMAIN_ICONS = {ALL: "apps", "數位科技": "smartphone", "健康運動": "directions_run", "藝術手作": "palette",
+                "音樂表演": "music_note", "語言文化": "translate", "生活財務": "savings", "社區志工": "volunteer_activism"}
 FIELD_ZH = {"course_name": "課名", "weekday": "星期", "start_time": "開始時間", "end_time": "結束時間",
             "start_date": "開始日期", "end_date": "結束日期", "venue": "地點"}
 # ── 色票：全站唯一一份（.streamlit/config.toml 的 [theme] 用同樣的值）──
@@ -199,12 +203,11 @@ p, li, label, .card { line-height: 1.6 !important; }
 h1 { font-size: 32px !important; font-weight: 700 !important; }
 h2, h3 { font-size: 26px !important; } h4 { font-size: 23px !important; }
 /* 可點的元件至少 48px 高、彼此至少間隔 8px */
-.stButton button, [data-testid="stBaseButton-pills"], [data-testid="stBaseButton-pillsActive"],
-[data-testid="stBaseButton-segmented_control"], [data-testid="stBaseButton-segmented_controlActive"],
+.stButton button, .stButtonGroup button,
 .stSelectbox [role="combobox"], [data-testid="stExpander"] summary, .src a {
   min-height: var(--tap) !important; }
 [data-testid="stCheckbox"] label, .stToggle label { min-height: var(--tap); display: flex; align-items: center; }
-[data-testid="stButtonGroup"] > div { gap: var(--gap) !important; }
+
 body, p, td, th, label { color: var(--text) !important; }
 .stApp { background: var(--bg); }
 /* 黃色底上的文字一律墨色，不用白字 */
@@ -219,11 +222,16 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
 .s-today, .s-ongoing { background: var(--primary); } .s-upcoming { background: var(--soft); color: var(--soft-text); }
 .s-ended, .s-unknown { background: var(--gray-bg); color: var(--muted); }
 .warn { color: var(--warn); font-weight: 700; }
-/* 多選的已選標籤顯示完整文字（預設不換行、會截成「音…」）：標籤不縮小，放不下就換到下一行 */
-[data-testid="stMultiSelectTagsContainer"] { flex-wrap: wrap !important; overflow: visible !important; row-gap: 4px;
-  height: auto !important; min-width: 0; }
-.stMultiSelect .react-aria-ComboBox > div { height: auto !important; max-height: none !important; }
-[data-testid="stMultiSelectTagsContainer"] span { flex-shrink: 0 !important; text-overflow: clip !important; }
+/* 膠囊標籤（st.pills）：未選＝白底墨框墨字；選中＝主色底墨框粗體，前面加勾（不只靠顏色區分） */
+/* Streamlit 1.67 的 pills 是 .stButtonGroup 裡帶 aria-pressed 的 button */
+.stButtonGroup button[aria-pressed] {
+  border: 1.5px solid var(--ink) !important; border-radius: 999px !important; color: var(--text) !important;
+  padding: 0 18px !important; min-height: var(--tap) !important; }
+.stButtonGroup button[aria-pressed="false"] { background: var(--card) !important; }
+.stButtonGroup button[aria-pressed="true"] { background: var(--primary) !important; }
+.stButtonGroup button[aria-pressed="true"] p { font-weight: 700 !important; }
+.stButtonGroup button[aria-pressed="true"] > div::before { content: "✓"; font-weight: 700; margin-right: 6px; }
+.stButtonGroup [role="toolbar"] { flex-wrap: wrap !important; gap: var(--gap) !important; }
 a { color: var(--text) !important; text-decoration: underline; }
 </style>""", unsafe_allow_html=True)
 
@@ -394,6 +402,22 @@ def when(c: dict) -> str:
 for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", "東區"), ("f_show_ended", False), ("f_all", False), ("picked", None)):
     st.session_state.setdefault(k, v)
 
+
+
+def sync_domain() -> None:
+    """主題標籤的「全部」只是呈現：選「全部」＝清掉其他主題；選了其他主題就取消「全部」。篩選仍看 f_domain。"""
+    sel = list(st.session_state.w_domain or [])
+    prev = st.session_state.get("w_domain_prev", [ALL])
+    if ALL in sel and ALL not in prev:
+        sel = [ALL]
+    elif ALL in sel and len(sel) > 1:
+        sel = [d for d in sel if d != ALL]
+    sel = sel or [ALL]
+    st.session_state.w_domain = st.session_state.w_domain_prev = sel
+    st.session_state.f_domain = [d for d in sel if d != ALL]
+
+
+st.session_state.setdefault("w_domain", st.session_state.f_domain or [ALL])
 st.title("台南樂齡課程搜尋")
 if not COURSES.exists():
     st.warning("還沒有課程資料。請先執行 import_courses.py 產生 data/courses.json。")
@@ -405,11 +429,12 @@ PHONES = {r["name"]: r["phone"].strip() for r in centers if (r.get("phone") or "
 st.markdown("**篩選條件**")
 # 選項一變就重跑：地圖數字和列表都用同一份 hits
 # 手機寬度（< 640px）Streamlit 會把 columns 改成直向排列
-c1, c2, c3, c4 = st.columns([3, 3, 4, 3])
-c1.multiselect("星期", WEEKDAYS, key="f_weekday", format_func=lambda w: "週" + w, placeholder="請選擇")
-c2.multiselect("時段", list(SLOTS), key="f_slot", format_func=SLOTS.get, placeholder="請選擇")
-c3.multiselect("主題", DOMAINS, key="f_domain", placeholder="請選擇")
-home = c4.selectbox("我住在", DISTRICTS, key="home")
+# 膠囊標籤可複選；手機上自動換行（不做左右滑動）
+st.pills("星期", WEEKDAYS, selection_mode="multi", key="f_weekday", format_func=lambda w: "週" + w)
+st.pills("時段", list(SLOTS), selection_mode="multi", key="f_slot", format_func=SLOTS.get)
+st.pills("主題", [ALL, *DOMAINS], selection_mode="multi", key="w_domain", on_change=sync_domain,
+         format_func=lambda d: f":material/{DOMAIN_ICONS[d]}: {d}")
+home = st.selectbox("我住在", DISTRICTS, key="home")
 st.toggle("顯示已結束的課", key="f_show_ended")
 st.toggle("看全台南的課", key="f_all")
 
@@ -460,6 +485,8 @@ for c in hits:
 def apply(**kv) -> None:
     for k, v in kv.items():
         st.session_state[k] = v
+    if "f_domain" in kv:  # 放寬主題時，主題標籤也要跟著顯示「全部」
+        st.session_state.w_domain = st.session_state.w_domain_prev = kv["f_domain"] or [ALL]
 
 
 def card(c: dict) -> str:
