@@ -272,13 +272,22 @@ def phone_html(center: str, phones: dict[str, str]) -> str:
     return f'請打電話向中心確認：<a href="tel:{html.escape(digits)}">{html.escape(tel)}</a>'
 
 
-def matches(c: dict, wd: list, slot: list, dom: list, keep_no_time: bool) -> bool:
-    """keep_no_time：原文沒寫日期、星期（或時間）的課，不被星期（或時段）條件刷掉。"""
-    if no_time(c) and not keep_no_time:
-        return False
-    return ((not wd or set(c["weekday"]) & set(wd) or (keep_no_time and not c["weekday"]))
-            and (not slot or c["time_slot"] in slot or (keep_no_time and not c["start_time"]))
-            and (not dom or c["domain"] in dom))
+def matches(c: dict, wd: list, slot: list, dom: list) -> str | None:
+    """"yes"＝星期、時段確定符合；"maybe"＝選了星期或時段，但這門課沒寫星期或時間，無法確定；None＝不符合"""
+    if dom and c["domain"] not in dom:
+        return None
+    maybe = False
+    if wd:
+        if not c["weekday"]:
+            maybe = True
+        elif not set(c["weekday"]) & set(wd):
+            return None
+    if slot:
+        if not c["start_time"]:
+            maybe = True
+        elif c["time_slot"] not in slot:
+            return None
+    return "maybe" if maybe else "yes"
 
 
 def today_tpe() -> str:
@@ -341,7 +350,7 @@ def when(c: dict) -> str:
     return f"{days} {t}"
 
 
-for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", "東區"), ("f_keep_no_time", True), ("f_show_ended", False), ("f_all", False), ("picked", None)):
+for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", "東區"), ("f_show_ended", False), ("f_all", False), ("picked", None)):
     st.session_state.setdefault(k, v)
 
 st.title("台南樂齡課程搜尋")
@@ -360,37 +369,48 @@ c1.multiselect("星期", WEEKDAYS, key="f_weekday", format_func=lambda w: "週" 
 c2.multiselect("時段", list(SLOTS), key="f_slot", format_func=SLOTS.get, placeholder="請選擇")
 c3.multiselect("主題", DOMAINS, key="f_domain", placeholder="請選擇")
 home = c4.selectbox("我住在", DISTRICTS, key="home")
-st.checkbox("也顯示時間沒寫的課", key="f_keep_no_time")
 st.toggle("顯示已結束的課", key="f_show_ended")
 st.toggle("看全台南的課", key="f_all")
 
 today = today_tpe()
-FILTER_KEYS = ("f_weekday", "f_slot", "f_domain", "f_keep_no_time", "f_show_ended")
+FILTER_KEYS = ("f_weekday", "f_slot", "f_domain", "f_show_ended")
 
 
-def filtered(p: dict) -> list[dict]:
-    """p：FILTER_KEYS 對應的值。地圖、列表、放寬建議都經過這裡，條件才會一致。"""
+def filtered(p: dict, verdict: str = "yes") -> list[dict]:
+    """p：FILTER_KEYS 對應的值。地圖、列表、放寬建議都經過這裡，條件才會一致。
+    verdict="yes" 只要確定符合的課；"maybe" 只要沒寫星期或時間、無法確定的課。"""
     return [c for c in courses
-            if matches(c, p["f_weekday"], p["f_slot"], p["f_domain"], p["f_keep_no_time"])
+            if matches(c, p["f_weekday"], p["f_slot"], p["f_domain"]) == verdict
             and (p["f_show_ended"] or status(c, today) != "ended")]
 
 
 params = {k: st.session_state[k] for k in FILTER_KEYS}
-hits = filtered(params)
+hits = filtered(params)            # 確定符合：地圖數字、標題門數只算這些
+unsure = filtered(params, "maybe")  # 沒選星期和時段時一定是空的，就不分段
 
 picked = st.session_state.picked
 near = set(NEIGHBORS.get(home, []))
 mine = {home} | near
 # 列表看哪些區：點了地圖上的區＝只看那區；開了「看全台南的課」＝全部；預設＝住的區＋鄰近區
 area = {picked} if picked else None if st.session_state.f_all else mine
-shown = sorted((c for c in hits if area is None or c["district"] in area), key=lambda c: sort_key(c, today))
-if picked:
-    sections = [(picked, shown)]
-else:
-    sections = [(home, [c for c in shown if c["district"] == home]),
-                ("鄰近區", [c for c in shown if c["district"] in near])]
+
+
+def in_view(rows: list[dict]) -> list[dict]:
+    return sorted((c for c in rows if area is None or c["district"] in area), key=lambda c: sort_key(c, today))
+
+
+def sectioned(rows: list[dict]) -> list[tuple[str, list[dict]]]:
+    if picked:
+        return [(picked, rows)]
+    out = [(home, [c for c in rows if c["district"] == home]),
+           ("鄰近區", [c for c in rows if c["district"] in near])]
     if area is None:
-        sections.append(("其他區", [c for c in shown if c["district"] not in mine]))
+        out.append(("其他區", [c for c in rows if c["district"] not in mine]))
+    return out
+
+
+shown, shown_unsure = in_view(hits), in_view(unsure)
+sections = sectioned(shown)
 counts: dict[str, int] = {}
 for c in hits:
     counts[c["district"]] = counts.get(c["district"], 0) + 1
@@ -427,7 +447,7 @@ with col_list:
     where = f"只看{picked}" if picked else "全台南" if area is None else f"{home}和鄰近區"
     st.subheader(f"符合條件的課：{len(shown)} 門（{where}）")
     n_no_time = sum(1 for c in shown if no_time(c))
-    if n_no_time:
+    if n_no_time and not shown_unsure:
         st.caption(f"其中 {n_no_time} 門沒寫上課日期或時間，排在最後面。")
     if picked:
         st.button(f"回到我住的區和鄰近區（{home}）", type="primary", use_container_width=True,
@@ -448,8 +468,6 @@ with col_list:
                            ("f_domain", f"{here}其他主題")):
             if params[key]:
                 options.append((label, count(area, **{key: []}), {key: []}))
-        if not params["f_keep_no_time"]:
-            options.append((f"{here}時間沒寫的課", count(area, f_keep_no_time=True), {"f_keep_no_time": True}))
         if not params["f_show_ended"]:
             options.append((f"{here}已結束的課", count(area, f_show_ended=True), {"f_show_ended": True}))
         options = [o for o in options if o[1]]
@@ -471,6 +489,14 @@ with col_list:
             rest = -budget
             st.button(f"再顯示 {min(PAGE, rest)} 門（還有 {rest} 門）", on_click=apply,
                       kwargs={"n_show": st.session_state.n_show + PAGE})
+
+    # 選了星期或時段時，沒寫星期／時間的課無法確定是否符合：另外收在預設收合的區塊
+    if shown_unsure:
+        with st.expander(f"另外 {len(shown_unsure)} 門時間沒寫，請打電話確認", expanded=False):
+            for title, items in sectioned(shown_unsure):
+                if items:
+                    st.markdown(f"#### {title} {len(items)} 門")
+                    st.markdown("".join(card(c) for c in items), unsafe_allow_html=True)
 
 # ── 地圖：行政區分層設色，預設放大到住的區和鄰近區 ──
 with col_map:
