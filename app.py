@@ -179,6 +179,27 @@ def no_time(c: dict) -> bool:
     return not c.get("dates") or not c["weekday"] or not c["start_time"]
 
 
+def missing_text(c: dict) -> str | None:
+    """依實際缺的欄位寫警示；有日期就一定有星期，所以只看日期和開始時間。"""
+    no_date, no_clock = not c.get("dates"), not c["start_time"]
+    if no_date and no_clock:
+        return "日期和時間都沒寫"
+    if no_date:
+        return "上課日期沒寫"
+    if no_clock:
+        return "上課時間沒寫"
+    return None
+
+
+def phone_html(center: str, phones: dict[str, str]) -> str:
+    """centers.csv 有 phone 欄才顯示可撥號的連結；目前沒有這個欄位，只寫「請打電話向中心確認」。"""
+    tel = phones.get(center)
+    if not tel:
+        return "請打電話向中心確認"
+    digits = "".join(ch for ch in tel if ch.isdigit() or ch == "+")
+    return f'請打電話向中心確認：<a href="tel:{html.escape(digits)}">{html.escape(tel)}</a>'
+
+
 def matches(c: dict, days: list, wd: list, slot: list, dom: list, keep_no_time: bool) -> bool:
     """keep_no_time：原文沒寫日期、星期（或時間）的課，不被日期、星期（或時段）條件刷掉。"""
     if no_time(c) and not keep_no_time:
@@ -258,6 +279,7 @@ if not COURSES.exists():
     st.stop()
 courses = load_courses(COURSES.stat().st_mtime)
 centers = load_centers()
+PHONES = {r["name"]: r["phone"].strip() for r in centers if (r.get("phone") or "").strip()}
 
 st.markdown("**篩選條件**")
 all_dates = sorted({d for c in courses for d in c.get("dates") or []})
@@ -352,7 +374,8 @@ for c in sorted(shown, key=lambda c: sort_key(c, today)):
     rows.append("<tr>" + "".join(f"<td>{x}</td>" for x in (
         html.escape(status_text(c, today)),
         html.escape(c["course_name"] or "")
-        + ('<br><span class="warn">⚠ 原文未註明日期／時間</span>' if no_time(c) else "")
+        + (f'<br><span class="warn">⚠ {missing_text(c)}，{phone_html(c["center"], PHONES)}</span>'
+           if missing_text(c) else "")
         + (f'<br><span class="warn">⚠ 推論（原文沒明寫）：{html.escape(inf)}</span>' if inf and SHOW_INFERRED else ""),
         html.escape(c["center"].replace("樂齡學習中心", "")), html.escape(date_text(c)), html.escape(when(c)), html.escape(c["venue"] or "沒寫"),
         html.escape(c["domain"] or "—"), link)) + "</tr>")
@@ -371,4 +394,4 @@ st.sidebar.markdown(f"- 中心：**{len({c['center'] for c in courses})}** / {le
                     f"- 資料更新：**{datetime.fromtimestamp(COURSES.stat().st_mtime):%Y-%m-%d}**\n"
                     f"- 貼文日期：{min(c['post_date'] for c in courses)} ～ {max(c['post_date'] for c in courses)}")
 st.sidebar.caption("⚠ 表示原文沒寫日期或時間，或這個欄位是推論的（AI 讀圖或照月份展開日期），請點「原文」確認。"
-                   if SHOW_INFERRED else "⚠ 表示原文沒寫日期或時間，請點「原文」確認。")
+                   if SHOW_INFERRED else "⚠ 表示原文沒寫上課日期或時間，請打電話向中心確認，或點「原文」看貼文。")
