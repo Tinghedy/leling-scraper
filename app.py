@@ -108,6 +108,7 @@ SHOW_INFERRED = False  # 清單裡要不要標「⚠ 推論（原文沒明寫）
 STATUS_ZH = {"upcoming": "即將開課", "ongoing": "進行中", "ended": "已結束", "unknown": "日期沒寫"}
 # 結果列旁的狀態標籤（可複選；都不選＝不限）
 STATUS_PILLS = {"ongoing": "進行中", "week": "本週有課", "upcoming": "即將開課"}
+SOURCE_SHORT = {"moe_doc": "教育部公告", "fb_post": "Facebook"}
 SOURCE_ZH = {"moe_doc": "教育部樂齡學習網公告", "fb_post": "FB 貼文"}
 
 # 台南 37 區的相鄰關係：由內政部鄉鎮界線（taiwan-atlas towns-10t）算出，邊界有共用頂點就算相鄰
@@ -206,7 +207,7 @@ h1 { font-size: 32px !important; font-weight: 700 !important; }
 h2, h3 { font-size: 26px !important; } h4 { font-size: 23px !important; }
 /* 可點的元件至少 48px 高、彼此至少間隔 8px */
 .stButton button, .stButtonGroup button,
-.stSelectbox [role="combobox"], [data-testid="stExpander"] summary, .src a {
+.stSelectbox [role="combobox"], [data-testid="stExpander"] summary {
   min-height: var(--tap) !important; }
 [data-testid="stCheckbox"] label, .stToggle label { min-height: var(--tap); display: flex; align-items: center; }
 
@@ -215,12 +216,23 @@ body, p, td, th, label { color: var(--text) !important; }
 /* 黃色底上的文字一律墨色，不用白字 */
 button[kind^="primary"], button[kind^="primary"] p { color: var(--text) !important; }
 button[kind^="primary"] { background: var(--primary) !important; border: 1.5px solid var(--ink) !important; }
-.card { border: 1.5px solid var(--ink); border-radius: 16px; padding: 12px 14px; margin: 0 0 12px; background: var(--card); }
-.card .name { font-weight: 700; font-size: 22px !important; }
-.card div { margin-top: 4px; }
-.card .k { color: var(--muted); }
-.badge { display: inline-block; padding: 1px 10px; border-radius: 999px; font-weight: 700; margin-right: 8px;
+/* 課程卡片：單欄直向排列 */
+.card { border: 1.5px solid var(--ink); border-radius: 16px; padding: 16px 18px; margin: 0 0 16px; background: var(--card); }
+.card .meta { color: var(--muted); font-size: 18px; margin-top: 8px; }
+.card .name { font-weight: 700; font-size: 22px !important; line-height: 1.4; margin: 4px 0 8px; }
+.card .row { display: flex; gap: 8px; align-items: flex-start; margin-top: 4px; }
+.card .row .ms { color: var(--muted); }
+.ms { font-family: "Material Symbols Rounded" !important; font-weight: normal; font-style: normal; font-size: 24px;
+      line-height: 1.3; letter-spacing: normal; text-transform: none; white-space: nowrap; direction: ltr;
+      -webkit-font-feature-settings: "liga"; font-feature-settings: "liga"; flex-shrink: 0; }
+.card .row.warn, .card .row .ms.warn { color: var(--warn); }
+.badge { display: inline-block; padding: 2px 14px; border-radius: 999px; font-weight: 700;
          border: 1.5px solid var(--ink); color: var(--text); }
+.src { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.src-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 48px; padding: 0 18px;
+           border: 1.5px solid var(--ink); border-radius: 999px; background: var(--card);
+           color: var(--text) !important; text-decoration: none !important; font-weight: 700; }
+.src-btn:hover { background: var(--soft); }
 .s-today, .s-ongoing { background: var(--primary); } .s-upcoming { background: var(--soft); color: var(--soft-text); }
 .s-ended, .s-unknown { background: var(--gray-bg); color: var(--muted); }
 .warn { color: var(--warn); font-weight: 700; }
@@ -535,37 +547,66 @@ def apply(**kv) -> None:
         st.session_state.w_domain = st.session_state.w_domain_prev = kv["f_domain"] or [ALL]
 
 
+def icon(name: str, cls: str = "") -> str:
+    """Material Symbols 圖示（Streamlit 已載入 Material Symbols Rounded 字型；和主題標籤的 :material/…: 同一套）"""
+    return f'<span class="ms {cls}" aria-hidden="true">{name}</span>'
+
+
+def badge(c: dict) -> tuple[str, str]:
+    """（樣式, 文字）：進行中 · 下一堂 11/16、即將開課 · 11/20 開始、已結束、日期沒寫"""
+    st_, nd = status(c, today), next_date(c, today)
+    if st_ == "ongoing":
+        return "ongoing", "進行中 · " + ("今天上課" if nd == today else f"下一堂 {short(nd)}" if nd else "")
+    if st_ == "upcoming":
+        return "upcoming", f"即將開課 · {short(nd)} 開始"
+    return st_, STATUS_ZH[st_]
+
+
+def sessions_text(c: dict) -> str:
+    ds = c.get("dates") or []
+    if not ds:
+        return "日期沒寫"
+    return f"共 {len(ds)} 堂（{short(ds[0])}）" if len(ds) == 1 else f"共 {len(ds)} 堂（{short(ds[0])}～{short(ds[-1])}）"
+
+
 def card(c: dict) -> str:
-    sk = "today" if next_date(c, today) == today else status(c, today)
-    links = "　".join(f'<a href="{html.escape(u)}" target="_blank" rel="noopener">原文{i if i > 1 else ""}</a>'
-                      for i, u in enumerate(c["source_urls"], 1))
+    """卡片：左上狀態徽章 → 主題 · 來源 → 課名 → 時間、堂數、地點（各有圖示）→ 警示 → 看原文按鈕"""
+    kind, text = badge(c)
+    meta = " · ".join(x for x in (c["domain"], SOURCE_SHORT.get(c["source_type"], "")) if x)
+    links = "".join(f'<a class="src-btn" href="{html.escape(u)}" target="_blank" rel="noopener">'
+                    f'{icon("open_in_new")}看原文{f" {i}" if len(c["source_urls"]) > 1 else ""}</a>'
+                    for i, u in enumerate(c["source_urls"], 1))
     miss = missing_text(c)
     inf = "、".join(FIELD_ZH.get(f, f) for f in c["inferred_fields"])
-    return (f'<div class="card"><span class="badge s-{sk}">{status_text(c, today)}</span>'
-            f'<span class="name">{html.escape(c["course_name"] or "")}</span>'
-            f'<div><span class="k">時間：</span>{html.escape(when(c))}</div>'
-            f'<div><span class="k">日期：</span>{html.escape(date_text(c, today))}</div>'
-            f'<div><span class="k">地點：</span>{html.escape(c["center"].replace("樂齡學習中心", ""))}'
-            f'・{html.escape(c["venue"] or "沒寫")}</div>'
-            + (f'<div><span class="k">主題：</span>{html.escape(c["domain"])}</div>' if c["domain"] else "")
-            + (f'<div class="warn">⚠ {miss}，{phone_html(c["center"], PHONES)}</div>' if miss else "")
-            + (f'<div class="warn">⚠ 推論（原文沒明寫）：{html.escape(inf)}</div>' if inf and SHOW_INFERRED else "")
-            + f"<div>{links}</div></div>")
+    place = f'{c["center"].replace("樂齡學習中心", "")} · {c["venue"] or "地點沒寫"}'
+    return (f'<div class="card"><span class="badge s-{kind}">{html.escape(text)}</span>'
+            + (f'<div class="meta">{html.escape(meta)}</div>' if meta else "")
+            + f'<div class="name">{html.escape(c["course_name"] or "")}</div>'
+            f'<div class="row">{icon("schedule")}<span>{html.escape(when(c))}</span></div>'
+            f'<div class="row">{icon("calendar_month")}<span>{html.escape(sessions_text(c))}</span></div>'
+            f'<div class="row">{icon("location_on")}<span>{html.escape(place)}</span></div>'
+            + (f'<div class="row warn">{icon("warning", "warn")}<span>{miss}，{phone_html(c["center"], PHONES)}</span></div>'
+               if miss else "")
+            + (f'<div class="row warn">{icon("warning", "warn")}<span>推論（原文沒明寫）：{html.escape(inf)}</span></div>'
+               if inf and SHOW_INFERRED else "")
+            + f'<div class="src">{links}</div></div>')
 
+
+where = f"只看{picked}" if picked else "全台南" if area is None else f"{home}和鄰近區"
+# 結果列：「符合 N 門 · 資料更新於 YYYY/MM/DD」＋狀態標籤
+# 放在列表和地圖的上方、整頁寬，桌機上門數和狀態標籤才排得下同一行
+r1, r2 = st.columns([1, 1], vertical_alignment="center")
+r1.markdown(f'<p class="result-line">符合 <b>{len(shown)}</b> 門（{html.escape(where)}）'
+            f'<span class="sep"> · </span>資料更新於 {data_updated(COURSES.stat().st_mtime).replace("-", "/")}</p>',
+            unsafe_allow_html=True)
+r2.pills("狀態", list(STATUS_PILLS), selection_mode="multi", key="f_status", format_func=STATUS_PILLS.get,
+         label_visibility="collapsed")
 
 # 桌機：列表在左、地圖在右；手機（< 640px）columns 直向排列，列表就在篩選條件下方、地圖上方
 col_list, col_map = st.columns([11, 9], gap="large")
 
 # ── 課程列表 ──
 with col_list:
-    where = f"只看{picked}" if picked else "全台南" if area is None else f"{home}和鄰近區"
-    # 結果列：「符合 N 門 · 資料更新於 YYYY/MM/DD」＋狀態標籤
-    r1, r2 = st.columns([1, 1], vertical_alignment="center")
-    r1.markdown(f'<p class="result-line">符合 <b>{len(shown)}</b> 門（{html.escape(where)}）'
-                f'<span class="sep"> · </span>資料更新於 {data_updated(COURSES.stat().st_mtime).replace("-", "/")}</p>',
-                unsafe_allow_html=True)
-    r2.pills("狀態", list(STATUS_PILLS), selection_mode="multi", key="f_status", format_func=STATUS_PILLS.get,
-             label_visibility="collapsed")
     n_no_time = sum(1 for c in shown if no_time(c))
     if n_no_time and not shown_unsure:
         st.caption(f"其中 {n_no_time} 門沒寫上課日期或時間，排在最後面。")
