@@ -255,6 +255,22 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
 .result-line { font-size: 22px !important; margin: 0; }
 .result-line b { font-size: 26px; }
 .result-line .sep { color: var(--muted); }
+/* 手機上的地圖：預設收起，圓形按鈕打開成全螢幕；桌機維持列表在左、地圖在右，按鈕隱藏 */
+.st-key-map_fab { display: none; }
+@media (max-width: 640px) {
+  .st-key-map_closed { display: none !important; }
+  .st-key-map_open { position: fixed !important; inset: 0; z-index: 1000000; background: var(--bg);
+                     overflow-y: auto; padding: 72px 16px 128px; }
+  .st-key-map_fab { display: block; position: fixed !important; right: 16px; bottom: 16px; z-index: 1000001;
+                    width: auto !important; }
+  .st-key-map_fab button { width: 84px; height: 84px; border-radius: 50% !important; background: var(--primary) !important;
+                           border: 1.5px solid var(--ink) !important; flex-direction: column; gap: 0;
+                           box-shadow: 0 2px 8px rgba(36, 34, 35, 0.35); }
+  .st-key-map_fab button p, .st-key-map_fab button span { color: var(--text) !important; font-weight: 700 !important;
+                                                           white-space: nowrap; margin: 0 !important; }
+  .st-key-map_fab button > div, .st-key-map_fab button > div > span { flex-direction: column !important; gap: 0 !important;
+                                                                      display: flex; align-items: center; }
+}
 .stButtonGroup [role="toolbar"] { flex-wrap: wrap !important; gap: var(--gap) !important; }
 a { color: var(--text) !important; text-decoration: underline; }
 </style>""", unsafe_allow_html=True)
@@ -423,7 +439,7 @@ def when(c: dict) -> str:
     return f"{days} {t}"
 
 
-for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", None), ("home_edit", False), ("f_show_ended", False), ("f_status", []), ("f_all", False), ("picked", None)):
+for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", None), ("home_edit", False), ("f_show_ended", False), ("f_status", []), ("f_all", False), ("picked", None), ("map_open", False)):
     st.session_state.setdefault(k, v)
 
 
@@ -662,7 +678,8 @@ with col_list:
                     st.markdown("".join(card(c) for c in items), unsafe_allow_html=True)
 
 # ── 地圖：行政區分層設色，預設放大到住的區和鄰近區 ──
-with col_map:
+# 手機（< 640px）：地圖預設收起，右下角圓形「地圖」按鈕打開成全螢幕、再點收起；桌機一律顯示（見 CSS）
+with col_map, st.container(key="map_open" if st.session_state.map_open else "map_closed"):
     # 預設放大到住的區和鄰近區（加上點選的區）；開「看全台南的課」時看全圖
     focus = None if area is None else mine | (area or set())
     result = district_map(data=map_svg(home, near, counts, picked, focus), key="district_map",
@@ -686,3 +703,8 @@ with st.expander("關於這份資料"):
                 f"- 貼文日期：{min(c['post_date'] for c in courses)} ～ {max(c['post_date'] for c in courses)}")
     st.caption("⚠ 表示原文沒寫日期或時間，或這個欄位是推論的（AI 讀圖或照月份展開日期），請點「原文」確認。"
                if SHOW_INFERRED else "⚠ 表示原文沒寫上課日期或時間，請打電話向中心確認，或點「原文」看貼文。")
+
+# 手機用的圓形地圖按鈕（桌機隱藏）
+st.button("收起" if st.session_state.map_open else "地圖", key="map_fab",
+          icon=":material/close:" if st.session_state.map_open else ":material/map:",
+          on_click=lambda: st.session_state.update(map_open=not st.session_state.map_open))
