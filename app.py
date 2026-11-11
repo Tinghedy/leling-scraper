@@ -178,6 +178,11 @@ button[kind^="primary"], button[kind^="primary"] p { color: #fff !important; }
 .courses th, .courses td { border-bottom: 1px solid #888; padding: 10px 8px; text-align: left; vertical-align: top; }
 .courses th { background: #e8e8e8; }
 .warn { color: #8a3b00; font-weight: 600; }
+/* 多選的已選標籤顯示完整文字（預設不換行、會截成「音…」）：標籤不縮小，放不下就換到下一行 */
+[data-testid="stMultiSelectTagsContainer"] { flex-wrap: wrap !important; overflow: visible !important; row-gap: 4px;
+  height: auto !important; min-width: 0; }
+.stMultiSelect .react-aria-ComboBox > div { height: auto !important; max-height: none !important; }
+[data-testid="stMultiSelectTagsContainer"] span { flex-shrink: 0 !important; text-overflow: clip !important; }
 a { color: #0645ad !important; text-decoration: underline; }
 </style>""", unsafe_allow_html=True)
 
@@ -244,12 +249,11 @@ def phone_html(center: str, phones: dict[str, str]) -> str:
     return f'請打電話向中心確認：<a href="tel:{html.escape(digits)}">{html.escape(tel)}</a>'
 
 
-def matches(c: dict, days: list, wd: list, slot: list, dom: list, keep_no_time: bool) -> bool:
-    """keep_no_time：原文沒寫日期、星期（或時間）的課，不被日期、星期（或時段）條件刷掉。"""
+def matches(c: dict, wd: list, slot: list, dom: list, keep_no_time: bool) -> bool:
+    """keep_no_time：原文沒寫日期、星期（或時間）的課，不被星期（或時段）條件刷掉。"""
     if no_time(c) and not keep_no_time:
         return False
-    return ((not days or set(c.get("dates") or []) & set(days) or (keep_no_time and not c.get("dates")))
-            and (not wd or set(c["weekday"]) & set(wd) or (keep_no_time and not c["weekday"]))
+    return ((not wd or set(c["weekday"]) & set(wd) or (keep_no_time and not c["weekday"]))
             and (not slot or c["time_slot"] in slot or (keep_no_time and not c["start_time"]))
             and (not dom or c["domain"] in dom))
 
@@ -274,11 +278,11 @@ def next_date(c: dict, today: str) -> str | None:
 
 
 def sort_key(c: dict, today: str) -> tuple:
-    """未結束的照下一次上課日由近到遠（沒日期的排後面）；已結束的放最後，最近結束的在前。"""
+    """未結束的照下一次上課日由近到遠；時間沒寫的課排在後面；已結束的放最後，最近結束的在前。"""
     if status(c, today) == "ended":
-        return (1, -date.fromisoformat(c["dates"][-1]).toordinal(), c["center"])
+        return (2, -date.fromisoformat(c["dates"][-1]).toordinal(), c["center"])
     nd = next_date(c, today)
-    return (0, date.fromisoformat(nd).toordinal() if nd else 10**9, c["center"])
+    return (1 if no_time(c) else 0, date.fromisoformat(nd).toordinal() if nd else 10**9, c["center"])
 
 
 def status_text(c: dict, today: str) -> str:
@@ -314,7 +318,7 @@ def when(c: dict) -> str:
     return f"{days} {t}"
 
 
-for k, v in (("f_date", []), ("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", "東區"), ("f_keep_no_time", True), ("f_show_ended", False), ("picked", None), ("picked_near", False)):
+for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", "東區"), ("f_keep_no_time", True), ("f_show_ended", False), ("picked", None), ("picked_near", False)):
     st.session_state.setdefault(k, v)
 
 st.title("台南樂齡課程搜尋")
@@ -326,25 +330,24 @@ centers = load_centers()
 PHONES = {r["name"]: r["phone"].strip() for r in centers if (r.get("phone") or "").strip()}
 
 st.markdown("**篩選條件**")
-all_dates = sorted({d for c in courses for d in c.get("dates") or []})
 # 選項一變就重跑：地圖數字和列表都用同一份 hits
-c0, c1, c2, c3, c4 = st.columns(5)
-c0.multiselect("日期", all_dates, key="f_date", format_func=md, placeholder="例如 10/8")
-c1.multiselect("星期", WEEKDAYS, key="f_weekday", format_func=lambda w: "週" + w)
-c2.multiselect("時段", list(SLOTS), key="f_slot", format_func=SLOTS.get)
-c3.multiselect("主題", DOMAINS, key="f_domain")
+# 手機寬度（< 640px）Streamlit 會把 columns 改成直向排列
+c1, c2, c3, c4 = st.columns([3, 3, 4, 3])
+c1.multiselect("星期", WEEKDAYS, key="f_weekday", format_func=lambda w: "週" + w, placeholder="請選擇")
+c2.multiselect("時段", list(SLOTS), key="f_slot", format_func=SLOTS.get, placeholder="請選擇")
+c3.multiselect("主題", DOMAINS, key="f_domain", placeholder="請選擇")
 home = c4.selectbox("我住在", DISTRICTS, key="home")
-st.checkbox("包含沒寫日期／星期／時間的課", key="f_keep_no_time")
+st.checkbox("也顯示時間沒寫的課", key="f_keep_no_time")
 st.toggle("顯示已結束的課", key="f_show_ended")
 
 today = today_tpe()
-FILTER_KEYS = ("f_date", "f_weekday", "f_slot", "f_domain", "f_keep_no_time", "f_show_ended")
+FILTER_KEYS = ("f_weekday", "f_slot", "f_domain", "f_keep_no_time", "f_show_ended")
 
 
 def filtered(p: dict) -> list[dict]:
     """p：FILTER_KEYS 對應的值。地圖、列表、放寬建議都經過這裡，條件才會一致。"""
     return [c for c in courses
-            if matches(c, p["f_date"], p["f_weekday"], p["f_slot"], p["f_domain"], p["f_keep_no_time"])
+            if matches(c, p["f_weekday"], p["f_slot"], p["f_domain"], p["f_keep_no_time"])
             and (p["f_show_ended"] or status(c, today) != "ended")]
 
 
@@ -378,6 +381,9 @@ shown = [c for c in hits if area is None or c["district"] in area]
 where = f"{picked}和鄰近區" if picked and st.session_state.picked_near else picked
 head = f"符合條件的課：{len(shown)} 門" + (f"（只看{where}）" if picked else "")
 st.subheader(head)
+n_no_time = sum(1 for c in shown if no_time(c))
+if n_no_time:
+    st.caption(f"其中 {n_no_time} 門沒寫上課日期或時間，排在最後面。")
 
 
 def apply(**kv) -> None:
@@ -400,7 +406,7 @@ if not shown:
     if picked:
         options.append(("全台南", count(None), {"picked": None, "picked_near": False}))
     for key, label in (("f_weekday", f"{here}其他星期"), ("f_slot", f"{here}其他時段"),
-                       ("f_domain", f"{here}其他主題"), ("f_date", f"{here}其他日期")):
+                       ("f_domain", f"{here}其他主題")):
         if params[key]:
             options.append((label, count(area, **{key: []}), {key: []}))
     if not params["f_keep_no_time"]:
