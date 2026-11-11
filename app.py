@@ -106,6 +106,8 @@ export default function(component) {
 district_map = st.components.v2.component("tainan_district_map", css=MAP_CSS, js=MAP_JS)
 SHOW_INFERRED = False  # 清單裡要不要標「⚠ 推論（原文沒明寫）」；暫時隱藏
 STATUS_ZH = {"upcoming": "即將開課", "ongoing": "進行中", "ended": "已結束", "unknown": "日期沒寫"}
+# 結果列旁的狀態標籤（可複選；都不選＝不限）
+STATUS_PILLS = {"ongoing": "進行中", "week": "本週有課", "upcoming": "即將開課"}
 SOURCE_ZH = {"moe_doc": "教育部樂齡學習網公告", "fb_post": "FB 貼文"}
 
 # 台南 37 區的相鄰關係：由內政部鄉鎮界線（taiwan-atlas towns-10t）算出，邊界有共用頂點就算相鄰
@@ -238,6 +240,9 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
   border-radius: 999px !important; padding: 0 20px !important; }
 .st-key-home_chip button p { font-weight: 700 !important; color: var(--text) !important; }
 .st-key-home_chip button p::before { content: "✓ "; }
+.result-line { font-size: 22px !important; margin: 0; }
+.result-line b { font-size: 26px; }
+.result-line .sep { color: var(--muted); }
 .stButtonGroup [role="toolbar"] { flex-wrap: wrap !important; gap: var(--gap) !important; }
 a { color: var(--text) !important; text-decoration: underline; }
 </style>""", unsafe_allow_html=True)
@@ -406,7 +411,7 @@ def when(c: dict) -> str:
     return f"{days} {t}"
 
 
-for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", None), ("home_edit", False), ("f_show_ended", False), ("f_all", False), ("picked", None)):
+for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", None), ("home_edit", False), ("f_show_ended", False), ("f_status", []), ("f_all", False), ("picked", None)):
     st.session_state.setdefault(k, v)
 
 
@@ -467,7 +472,18 @@ if st.session_state.home:
     st.toggle("看全台南的課", key="f_all")
 
 today = today_tpe()
-FILTER_KEYS = ("f_weekday", "f_slot", "f_domain", "f_show_ended")
+FILTER_KEYS = ("f_weekday", "f_slot", "f_domain", "f_show_ended", "f_status")
+_d = date.fromisoformat(today)
+WEEK_END = date.fromordinal(_d.toordinal() + 6 - _d.weekday()).isoformat()  # 本週日
+
+
+def status_ok(c: dict, chosen: list) -> bool:
+    """狀態標籤：進行中、本週有課（今天到本週日之間有上課日）、即將開課；選多個＝符合任一個"""
+    if not chosen:
+        return True
+    return (("ongoing" in chosen and status(c, today) == "ongoing")
+            or ("upcoming" in chosen and status(c, today) == "upcoming")
+            or ("week" in chosen and any(today <= d <= WEEK_END for d in c.get("dates") or [])))
 
 
 def filtered(p: dict, verdict: str = "yes") -> list[dict]:
@@ -475,7 +491,7 @@ def filtered(p: dict, verdict: str = "yes") -> list[dict]:
     verdict="yes" 只要確定符合的課；"maybe" 只要沒寫星期或時間、無法確定的課。"""
     return [c for c in courses
             if matches(c, p["f_weekday"], p["f_slot"], p["f_domain"]) == verdict
-            and (p["f_show_ended"] or status(c, today) != "ended")]
+            and (p["f_show_ended"] or status(c, today) != "ended") and status_ok(c, p["f_status"])]
 
 
 params = {k: st.session_state[k] for k in FILTER_KEYS}
@@ -543,7 +559,13 @@ col_list, col_map = st.columns([11, 9], gap="large")
 # ── 課程列表 ──
 with col_list:
     where = f"只看{picked}" if picked else "全台南" if area is None else f"{home}和鄰近區"
-    st.subheader(f"符合條件的課：{len(shown)} 門（{where}）")
+    # 結果列：「符合 N 門 · 資料更新於 YYYY/MM/DD」＋狀態標籤
+    r1, r2 = st.columns([1, 1], vertical_alignment="center")
+    r1.markdown(f'<p class="result-line">符合 <b>{len(shown)}</b> 門（{html.escape(where)}）'
+                f'<span class="sep"> · </span>資料更新於 {data_updated(COURSES.stat().st_mtime).replace("-", "/")}</p>',
+                unsafe_allow_html=True)
+    r2.pills("狀態", list(STATUS_PILLS), selection_mode="multi", key="f_status", format_func=STATUS_PILLS.get,
+             label_visibility="collapsed")
     n_no_time = sum(1 for c in shown if no_time(c))
     if n_no_time and not shown_unsure:
         st.caption(f"其中 {n_no_time} 門沒寫上課日期或時間，排在最後面。")
@@ -566,6 +588,8 @@ with col_list:
                            ("f_domain", f"{here}其他主題")):
             if params[key]:
                 options.append((label, count(area, **{key: []}), {key: []}))
+        if params["f_status"]:
+            options.append((f"{here}不限狀態", count(area, f_status=[]), {"f_status": []}))
         if not params["f_show_ended"]:
             options.append((f"{here}已結束的課", count(area, f_show_ended=True), {"f_show_ended": True}))
         options = [o for o in options if o[1]]
