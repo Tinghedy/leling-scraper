@@ -1,0 +1,274 @@
+"""
+台南樂齡課程搜尋。只在本機執行，不要部署或公開分享。
+
+  手動篩選（日期、星期、時段、主題）＋「我住在」→ 行政區地圖（住的區深色、相鄰區淺色、其他灰色，
+  每區標出符合條件的課數；點一區只看那區的課，再點一次取消）＋課程清單＋原文連結
+
+資料：data/courses.json（import_courses.py 從 leling-courses 的樂齡課程.xlsx 轉出）、centers.csv（中心所在的行政區）、
+      tainan_map.json（build_map.py 從 taiwaneseOMG 的 Figma 地圖設計稿轉出）
+不呼叫任何模型，也不需要 API 金鑰。口語查詢（Gemini 把一句話轉成篩選條件）先拿掉了，
+要加回來可以參考 commit f918c89 的 app.py。
+啟動：uv run --python 3.12 --with-requirements requirements.txt streamlit run app.py
+"""
+
+from __future__ import annotations
+
+import csv
+import html
+import json
+from datetime import date, datetime
+from pathlib import Path
+
+import streamlit as st
+
+BASE = Path(__file__).resolve().parent
+COURSES = BASE / "data" / "courses.json"
+CENTERS = BASE / "centers.csv"
+MAP = BASE / "tainan_map.json"
+
+# 和 extract.py 相同（不 import extract，因為它會載入 Gemini 的 SDK）
+DOMAINS = ["數位科技", "健康運動", "藝術手作", "音樂表演", "語言文化", "生活財務", "社區志工"]
+WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"]
+SLOTS = {"morning": "上午", "afternoon": "下午", "evening": "晚上"}
+FIELD_ZH = {"course_name": "課名", "weekday": "星期", "start_time": "開始時間", "end_time": "結束時間",
+            "start_date": "開始日期", "end_date": "結束日期", "venue": "地點"}
+# 地圖：住的區深藍、相鄰區淺藍、其他區灰色（同一色系的深淺，不靠紅綠區分）；選到的區加橘色粗框
+MAP_CSS = """
+.map { max-width: 780px; margin: 0 auto; }
+svg { width: 100%; height: auto; display: block; }
+.d { cursor: pointer; outline: none; }
+.a { stroke: #fff; stroke-width: 1.2; }
+.l { fill: none; stroke: #fff; stroke-width: 1.2; }
+.home .a { fill: #08519c; } .near .a { fill: #9ecae1; } .other .a { fill: #dcdcdc; }
+.d:hover .a, .d:focus-visible .a { filter: brightness(0.85); }
+.picked .a { stroke: #e66100; stroke-width: 4; }
+.t { font: 700 11px "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif; text-anchor: middle;
+     pointer-events: none; fill: #111; paint-order: stroke; stroke: #fff; stroke-width: 3px; }
+.t.home { fill: #fff; stroke: #08519c; }
+"""
+# 點一區（或用鍵盤 Enter）就把區名傳回 Python
+MAP_JS = """
+export default function(component) {
+    const { data, setTriggerValue, parentElement } = component;
+    let box = parentElement.querySelector(".map");
+    if (!box) {
+        box = document.createElement("div");
+        box.className = "map";
+        parentElement.appendChild(box);
+    }
+    box.innerHTML = data;
+    box.querySelectorAll("[data-name]").forEach((g) => {
+        g.onclick = () => setTriggerValue("clicked", g.dataset.name);
+        g.onkeydown = (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setTriggerValue("clicked", g.dataset.name);
+            }
+        };
+    });
+}
+"""
+district_map = st.components.v2.component("tainan_district_map", css=MAP_CSS, js=MAP_JS)
+SHOW_INFERRED = False  # 清單裡要不要標「⚠ 推論（原文沒明寫）」；暫時隱藏
+SOURCE_ZH = {"moe_doc": "教育部樂齡學習網公告", "fb_post": "FB 貼文"}
+
+# 台南 37 區的相鄰關係：由內政部鄉鎮界線（taiwan-atlas towns-10t）算出，邊界有共用頂點就算相鄰
+NEIGHBORS = {
+    "七股區": ["佳里區", "安南區", "將軍區", "西港區"],
+    "下營區": ["六甲區", "學甲區", "官田區", "新營區", "柳營區", "鹽水區", "麻豆區"],
+    "中西區": ["北區", "南區", "安南區", "安平區", "東區"],
+    "仁德區": ["南區", "東區", "歸仁區", "永康區"],
+    "佳里區": ["七股區", "學甲區", "將軍區", "西港區", "麻豆區"],
+    "六甲區": ["下營區", "大內區", "官田區", "東山區", "柳營區", "楠西區"],
+    "北區": ["中西區", "安南區", "東區", "永康區"],
+    "北門區": ["學甲區", "將軍區"],
+    "南化區": ["左鎮區", "楠西區", "玉井區"],
+    "南區": ["中西區", "仁德區", "安平區", "東區"],
+    "善化區": ["大內區", "安定區", "官田區", "山上區", "新市區", "麻豆區"],
+    "大內區": ["六甲區", "善化區", "官田區", "山上區", "楠西區", "玉井區"],
+    "學甲區": ["下營區", "佳里區", "北門區", "將軍區", "鹽水區", "麻豆區"],
+    "安南區": ["七股區", "中西區", "北區", "安定區", "安平區", "新市區", "永康區", "西港區"],
+    "安定區": ["善化區", "安南區", "新市區", "西港區", "麻豆區"],
+    "安平區": ["中西區", "南區", "安南區"],
+    "官田區": ["下營區", "六甲區", "善化區", "大內區", "麻豆區"],
+    "將軍區": ["七股區", "佳里區", "北門區", "學甲區"],
+    "山上區": ["善化區", "大內區", "左鎮區", "新化區", "新市區", "玉井區"],
+    "左鎮區": ["南化區", "山上區", "新化區", "玉井區", "龍崎區"],
+    "後壁區": ["新營區", "東山區", "白河區", "鹽水區"],
+    "新化區": ["山上區", "左鎮區", "新市區", "歸仁區", "永康區", "關廟區", "龍崎區"],
+    "新市區": ["善化區", "安南區", "安定區", "山上區", "新化區", "永康區"],
+    "新營區": ["下營區", "後壁區", "東山區", "柳營區", "鹽水區"],
+    "東區": ["中西區", "仁德區", "北區", "南區", "永康區"],
+    "東山區": ["六甲區", "後壁區", "新營區", "柳營區", "楠西區", "白河區"],
+    "柳營區": ["下營區", "六甲區", "新營區", "東山區"],
+    "楠西區": ["六甲區", "南化區", "大內區", "東山區", "玉井區"],
+    "歸仁區": ["仁德區", "新化區", "永康區", "關廟區"],
+    "永康區": ["仁德區", "北區", "安南區", "新化區", "新市區", "東區", "歸仁區"],
+    "玉井區": ["南化區", "大內區", "山上區", "左鎮區", "楠西區"],
+    "白河區": ["後壁區", "東山區"],
+    "西港區": ["七股區", "佳里區", "安南區", "安定區", "麻豆區"],
+    "關廟區": ["新化區", "歸仁區", "龍崎區"],
+    "鹽水區": ["下營區", "學甲區", "後壁區", "新營區"],
+    "麻豆區": ["下營區", "佳里區", "善化區", "學甲區", "安定區", "官田區", "西港區"],
+    "龍崎區": ["左鎮區", "新化區", "關廟區"],
+}
+DISTRICTS = sorted(NEIGHBORS)
+
+st.set_page_config(page_title="台南樂齡課程搜尋", layout="wide")
+# 使用者是長者和家屬：字放大、對比加深
+st.markdown("""<style>
+html, body, [class*="css"], .stMarkdown, p, li, label, input, button, td, th { font-size: 20px !important; }
+h1 { font-size: 34px !important; } h2, h3 { font-size: 26px !important; }
+body, p, td, th, label { color: #111 !important; }
+button[kind^="primary"], button[kind^="primary"] p { color: #fff !important; }
+.courses { border-collapse: collapse; width: 100%; }
+.courses th, .courses td { border-bottom: 1px solid #888; padding: 10px 8px; text-align: left; vertical-align: top; }
+.courses th { background: #e8e8e8; }
+.warn { color: #8a3b00; font-weight: 600; }
+a { color: #0645ad !important; text-decoration: underline; }
+</style>""", unsafe_allow_html=True)
+
+
+@st.cache_data
+def load_courses(mtime: float) -> list[dict]:
+    return json.loads(COURSES.read_text(encoding="utf-8"))
+
+
+@st.cache_data
+def load_map() -> dict:
+    return json.loads(MAP.read_text(encoding="utf-8"))
+
+
+def map_svg(home: str, near: set[str], counts: dict[str, int], picked: str | None) -> str:
+    """區名都來自 tainan_map.json（固定的 37 區），不含使用者輸入。"""
+    m = load_map()
+    groups, labels = [], []
+    # 選到的區最後畫，粗框才不會被鄰區蓋住
+    for d in sorted(m["districts"], key=lambda d: d["name"] == picked):
+        name, n = d["name"], counts.get(d["name"], 0)
+        tier = "home" if name == home else "near" if name in near else "other"
+        paths = "".join(f'<path class="a" d="{p}"/>' for p in d["areas"]) + \
+            "".join(f'<path class="l" d="{p}"/>' for p in d["lines"])
+        groups.append(f'<g class="d {tier}{" picked" if name == picked else ""}" data-name="{name}" tabindex="0" '
+                      f'role="button" aria-label="{name}，{n} 門課"><title>{name}：{n} 門</title>{paths}</g>')
+        x, y = d["label"]
+        labels.append(f'<text class="t {tier}" x="{x}" y="{y}"><tspan x="{x}" dy="-0.15em">{name}</tspan>'
+                      f'<tspan x="{x}" dy="1.15em">{n}</tspan></text>')
+    return (f'<svg viewBox="0 0 {m["width"]} {m["height"]}" aria-label="臺南市行政區地圖">'
+            + "".join(groups) + "".join(labels) + "</svg>")
+
+
+@st.cache_data
+def load_centers() -> list[dict]:
+    with CENTERS.open(encoding="utf-8-sig", newline="") as f:
+        return [r for r in csv.DictReader(f) if r.get("lat") and r.get("lng")]
+
+
+def no_time(c: dict) -> bool:
+    return not c.get("dates") or not c["weekday"] or not c["start_time"]
+
+
+def matches(c: dict, days: list, wd: list, slot: list, dom: list, keep_no_time: bool) -> bool:
+    """keep_no_time：原文沒寫日期、星期（或時間）的課，不被日期、星期（或時段）條件刷掉。"""
+    if no_time(c) and not keep_no_time:
+        return False
+    return ((not days or set(c.get("dates") or []) & set(days) or (keep_no_time and not c.get("dates")))
+            and (not wd or set(c["weekday"]) & set(wd) or (keep_no_time and not c["weekday"]))
+            and (not slot or c["time_slot"] in slot or (keep_no_time and not c["start_time"]))
+            and (not dom or c["domain"] in dom))
+
+
+def md(d: str) -> str:
+    """2026-10-08 → 10/8（三）"""
+    y, m, dd = (int(x) for x in d.split("-"))
+    return f"{m}/{dd}（{WEEKDAYS[date(y, m, dd).weekday()]}）"
+
+
+def date_text(c: dict) -> str:
+    ds = c.get("dates") or []
+    if not ds:
+        return "日期沒寫"
+    if len(ds) <= 4:
+        return "、".join(md(d).split("（")[0] for d in ds)
+    return f"{md(ds[0]).split('（')[0]}～{md(ds[-1]).split('（')[0]}，共 {len(ds)} 堂"
+
+
+def when(c: dict) -> str:
+    days = ("週" + "、".join(c["weekday"])) if c["weekday"] else "星期沒寫"
+    t = f"{c['start_time']}–{c['end_time'] or '?'}" if c["start_time"] else "時間沒寫"
+    return f"{days} {t}"
+
+
+for k, v in (("f_date", []), ("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", "東區"), ("f_keep_no_time", True), ("picked", None)):
+    st.session_state.setdefault(k, v)
+
+st.title("台南樂齡課程搜尋")
+if not COURSES.exists():
+    st.warning("還沒有課程資料。請先執行 import_courses.py 產生 data/courses.json。")
+    st.stop()
+courses = load_courses(COURSES.stat().st_mtime)
+centers = load_centers()
+
+st.markdown("**篩選條件**")
+all_dates = sorted({d for c in courses for d in c.get("dates") or []})
+# 放在 form 裡：選好所有條件後按「送出」才一次套用，不會每改一格就重跑
+with st.form("filters", border=False):
+    c0, c1, c2, c3, c4 = st.columns(5)
+    days = c0.multiselect("日期", all_dates, key="f_date", format_func=md, placeholder="例如 10/8")
+    wd = c1.multiselect("星期", WEEKDAYS, key="f_weekday", format_func=lambda w: "週" + w)
+    slot = c2.multiselect("時段", list(SLOTS), key="f_slot", format_func=SLOTS.get)
+    dom = c3.multiselect("主題", DOMAINS, key="f_domain")
+    home = c4.selectbox("我住在", DISTRICTS, key="home")
+    keep_no_time = st.checkbox("包含沒寫日期／星期／時間的課", key="f_keep_no_time")
+    st.form_submit_button("送出", type="primary")
+
+hits = [c for c in courses if matches(c, days, wd, slot, dom, keep_no_time)]
+
+# ── 地圖：行政區分層設色 ──
+near = set(NEIGHBORS.get(home, []))
+picked = st.session_state.picked
+counts: dict[str, int] = {}
+for c in hits:
+    counts[c["district"]] = counts.get(c["district"], 0) + 1
+result = district_map(data=map_svg(home, near, counts, picked), key="district_map", on_clicked_change=lambda: None)
+if result.clicked:  # 點同一區＝取消，點別區＝換過去
+    st.session_state.picked = None if result.clicked == picked else result.clicked
+    st.rerun()
+st.caption(f"深藍＝你住的{home}，淺藍＝相鄰的區，灰色＝其他區；區名下的數字是符合目前條件的課數。"
+           "點一區只看那區的課，再點一次取消。")
+
+# ── 課程清單 ──
+shown = [c for c in hits if not picked or c["district"] == picked]
+head = f"符合條件的課：{len(shown)} 門" + (f"（只看{picked}）" if picked else "")
+st.subheader(head)
+if picked and st.button("看全部行政區的課"):
+    st.session_state.picked = None
+    st.rerun()
+rows = []
+# 住的區排最前面，再來相鄰區，其他區最後；同一層照開課日期
+tier = lambda c: 0 if c["district"] == home else 1 if c["district"] in near else 2  # noqa: E731
+for c in sorted(shown, key=lambda c: (tier(c), c["start_date"] or "9999", c["center"])):
+    inf = "、".join(FIELD_ZH.get(f, f) for f in c["inferred_fields"])
+    link = f'<a href="{html.escape(c["source_url"])}" target="_blank" rel="noopener">原文</a>' if c["source_url"] else ""
+    rows.append("<tr>" + "".join(f"<td>{x}</td>" for x in (
+        html.escape(c["course_name"] or "")
+        + ('<br><span class="warn">⚠ 原文未註明日期／時間</span>' if no_time(c) else "")
+        + (f'<br><span class="warn">⚠ 推論（原文沒明寫）：{html.escape(inf)}</span>' if inf and SHOW_INFERRED else ""),
+        html.escape(c["center"].replace("樂齡學習中心", "")), html.escape(date_text(c)), html.escape(when(c)), html.escape(c["venue"] or "沒寫"),
+        html.escape(c["domain"] or "—"), link)) + "</tr>")
+st.markdown('<table class="courses"><tr><th>課名</th><th>中心</th><th>日期</th><th>星期與時間</th><th>地點</th><th>主題</th>'
+            '<th>原文</th></tr>' + "".join(rows) + "</table>" if rows else "沒有符合的課，請放寬條件。",
+            unsafe_allow_html=True)
+
+# ── 側邊欄：資料涵蓋範圍 ──
+st.sidebar.header("資料涵蓋範圍")
+by_source: dict[str, int] = {}
+for c in courses:
+    by_source[c["source_type"]] = by_source.get(c["source_type"], 0) + 1
+st.sidebar.markdown("**資料來源**\n" + "".join(f"- {SOURCE_ZH.get(k, k)}：**{n}** 門\n" for k, n in by_source.items()))
+st.sidebar.markdown(f"- 中心：**{len({c['center'] for c in courses})}** / {len(centers)} 間\n- 課程：**{len(courses)}** 門\n"
+                    f"- 沒寫日期、星期或時間：{sum(no_time(c) for c in courses)} 門\n"
+                    f"- 資料更新：**{datetime.fromtimestamp(COURSES.stat().st_mtime):%Y-%m-%d}**\n"
+                    f"- 貼文日期：{min(c['post_date'] for c in courses)} ～ {max(c['post_date'] for c in courses)}")
+st.sidebar.caption("⚠ 表示原文沒寫日期或時間，或這個欄位是推論的（AI 讀圖或照月份展開日期），請點「原文」確認。"
+                   if SHOW_INFERRED else "⚠ 表示原文沒寫日期或時間，請點「原文」確認。")
