@@ -69,6 +69,7 @@ export default function(component) {
 }
 """
 district_map = st.components.v2.component("tainan_district_map", css=MAP_CSS, js=MAP_JS)
+SHOW_INFERRED = False  # 清單裡要不要標「⚠ 推論（原文沒明寫）」；暫時隱藏
 SOURCE_ZH = {"moe_doc": "教育部樂齡學習網公告", "fb_post": "FB 貼文"}
 
 # 台南 37 區的相鄰關係：由內政部鄉鎮界線（taiwan-atlas towns-10t）算出，邊界有共用頂點就算相鄰
@@ -119,6 +120,7 @@ st.markdown("""<style>
 html, body, [class*="css"], .stMarkdown, p, li, label, input, button, td, th { font-size: 20px !important; }
 h1 { font-size: 34px !important; } h2, h3 { font-size: 26px !important; }
 body, p, td, th, label { color: #111 !important; }
+button[kind^="primary"], button[kind^="primary"] p { color: #fff !important; }
 .courses { border-collapse: collapse; width: 100%; }
 .courses th, .courses td { border-bottom: 1px solid #888; padding: 10px 8px; text-align: left; vertical-align: top; }
 .courses th { background: #e8e8e8; }
@@ -197,7 +199,7 @@ def when(c: dict) -> str:
     return f"{days} {t}"
 
 
-for k, v in (("f_date", []), ("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", "東區"), ("picked", None)):
+for k, v in (("f_date", []), ("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", "東區"), ("f_keep_no_time", True), ("picked", None)):
     st.session_state.setdefault(k, v)
 
 st.title("台南樂齡課程搜尋")
@@ -209,13 +211,16 @@ centers = load_centers()
 
 st.markdown("**篩選條件**")
 all_dates = sorted({d for c in courses for d in c.get("dates") or []})
-c0, c1, c2, c3, c4 = st.columns(5)
-days = c0.multiselect("日期", all_dates, key="f_date", format_func=md, placeholder="例如 10/8")
-wd = c1.multiselect("星期", WEEKDAYS, key="f_weekday", format_func=lambda w: "週" + w)
-slot = c2.multiselect("時段", list(SLOTS), key="f_slot", format_func=SLOTS.get)
-dom = c3.multiselect("主題", DOMAINS, key="f_domain")
-home = c4.selectbox("我住在", DISTRICTS, key="home")
-keep_no_time = st.checkbox("包含沒寫日期／星期／時間的課", value=True)
+# 放在 form 裡：選好所有條件後按「送出」才一次套用，不會每改一格就重跑
+with st.form("filters", border=False):
+    c0, c1, c2, c3, c4 = st.columns(5)
+    days = c0.multiselect("日期", all_dates, key="f_date", format_func=md, placeholder="例如 10/8")
+    wd = c1.multiselect("星期", WEEKDAYS, key="f_weekday", format_func=lambda w: "週" + w)
+    slot = c2.multiselect("時段", list(SLOTS), key="f_slot", format_func=SLOTS.get)
+    dom = c3.multiselect("主題", DOMAINS, key="f_domain")
+    home = c4.selectbox("我住在", DISTRICTS, key="home")
+    keep_no_time = st.checkbox("包含沒寫日期／星期／時間的課", key="f_keep_no_time")
+    st.form_submit_button("送出", type="primary")
 
 hits = [c for c in courses if matches(c, days, wd, slot, dom, keep_no_time)]
 
@@ -248,7 +253,7 @@ for c in sorted(shown, key=lambda c: (tier(c), c["start_date"] or "9999", c["cen
     rows.append("<tr>" + "".join(f"<td>{x}</td>" for x in (
         html.escape(c["course_name"] or "")
         + ('<br><span class="warn">⚠ 原文未註明日期／時間</span>' if no_time(c) else "")
-        + (f'<br><span class="warn">⚠ 推論（原文沒明寫）：{html.escape(inf)}</span>' if inf else ""),
+        + (f'<br><span class="warn">⚠ 推論（原文沒明寫）：{html.escape(inf)}</span>' if inf and SHOW_INFERRED else ""),
         html.escape(c["center"].replace("樂齡學習中心", "")), html.escape(date_text(c)), html.escape(when(c)), html.escape(c["venue"] or "沒寫"),
         html.escape(c["domain"] or "—"), link)) + "</tr>")
 st.markdown('<table class="courses"><tr><th>課名</th><th>中心</th><th>日期</th><th>星期與時間</th><th>地點</th><th>主題</th>'
@@ -265,4 +270,5 @@ st.sidebar.markdown(f"- 中心：**{len({c['center'] for c in courses})}** / {le
                     f"- 沒寫日期、星期或時間：{sum(no_time(c) for c in courses)} 門\n"
                     f"- 資料更新：**{datetime.fromtimestamp(COURSES.stat().st_mtime):%Y-%m-%d}**\n"
                     f"- 貼文日期：{min(c['post_date'] for c in courses)} ～ {max(c['post_date'] for c in courses)}")
-st.sidebar.caption("⚠ 表示原文沒寫日期或時間，或這個欄位是推論的（AI 讀圖或照月份展開日期），請點「原文」確認。")
+st.sidebar.caption("⚠ 表示原文沒寫日期或時間，或這個欄位是推論的（AI 讀圖或照月份展開日期），請點「原文」確認。"
+                   if SHOW_INFERRED else "⚠ 表示原文沒寫日期或時間，請點「原文」確認。")
