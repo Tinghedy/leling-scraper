@@ -55,6 +55,9 @@ THEME_CSS = """
   --muted: #5C574D;     /* 次要文字（最淺只到這個灰） */
   --gray-bg: #F7F7F7;   /* 其他區、0 門的區、已結束徽章 */
   --warn: #D6331C;      /* 只用在警示文字和圖示 */
+  --font: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  --tap: 48px;          /* 可點元件的最小高度 */
+  --gap: 8px;           /* 可點元件之間的最小間距 */
 }
 """
 # 地圖：我住的區主色、鄰近區淡黃、其他區淺灰、0 門的區淺灰加灰字；區界線墨色；點選的區加粗墨框
@@ -71,7 +74,7 @@ svg { width: 100%; height: auto; display: block; }
 .t.zero { fill: var(--muted, #5C574D); }
 .d:hover .a, .d:focus-visible .a { filter: brightness(0.92); }
 .picked .a { stroke: var(--ink, #242223); stroke-width: 4; }
-.t { font: 700 11px "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif; text-anchor: middle;
+.t { font: 700 11px var(--font, "Noto Sans TC", sans-serif); text-anchor: middle;
      pointer-events: none; fill: var(--text, #1A1A1A); paint-order: stroke; stroke: var(--card, #FFFFFF); stroke-width: 3px; }
 """
 # 點一區（或用鍵盤 Enter）就把區名傳回 Python
@@ -187,11 +190,21 @@ def merge_courses(rows: list[dict]) -> list[dict]:
     return out
 
 st.set_page_config(page_title="台南樂齡課程搜尋", layout="wide")
-# 使用者是長者和家屬：字放大、對比加深
+# 使用者是長者和家屬：字放大（內文最小 18px，這裡用 20px）、行高 1.6、對比加深
 st.markdown(f"<style>{THEME_CSS}</style>", unsafe_allow_html=True)
 st.markdown("""<style>
 html, body, [class*="css"], .stMarkdown, p, li, label, input, button, td, th { font-size: 20px !important; }
-h1 { font-size: 34px !important; } h2, h3 { font-size: 26px !important; } h4 { font-size: 23px !important; }
+html, body, .stApp, p, li, label, button, input { font-family: var(--font) !important; }
+p, li, label, .card { line-height: 1.6 !important; }
+h1 { font-size: 32px !important; font-weight: 700 !important; }
+h2, h3 { font-size: 26px !important; } h4 { font-size: 23px !important; }
+/* 可點的元件至少 48px 高、彼此至少間隔 8px */
+.stButton button, [data-testid="stBaseButton-pills"], [data-testid="stBaseButton-pillsActive"],
+[data-testid="stBaseButton-segmented_control"], [data-testid="stBaseButton-segmented_controlActive"],
+.stSelectbox [role="combobox"], [data-testid="stExpander"] summary, .src a {
+  min-height: var(--tap) !important; }
+[data-testid="stCheckbox"] label, .stToggle label { min-height: var(--tap); display: flex; align-items: center; }
+[data-testid="stButtonGroup"] > div { gap: var(--gap) !important; }
 body, p, td, th, label { color: var(--text) !important; }
 .stApp { background: var(--bg); }
 /* 黃色底上的文字一律墨色，不用白字 */
