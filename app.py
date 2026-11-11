@@ -41,21 +41,38 @@ WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"]
 SLOTS = {"morning": "上午", "afternoon": "下午", "evening": "晚上"}
 FIELD_ZH = {"course_name": "課名", "weekday": "星期", "start_time": "開始時間", "end_time": "結束時間",
             "start_date": "開始日期", "end_date": "結束日期", "venue": "地點"}
-# 地圖：住的區深藍、相鄰區淺藍、其他區灰色（同一色系的深淺，不靠紅綠區分）；選到的區加橘色粗框
+# ── 色票：全站唯一一份（.streamlit/config.toml 的 [theme] 用同樣的值）──
+# 對比（WCAG AA，一般文字 ≥ 4.5:1）見 README 或 commit 說明；黃色底上一律用墨色字，不用白字
+THEME_CSS = """
+:root {
+  --bg: #FFFCF3;        /* 頁面背景 */
+  --card: #FFFFFF;      /* 卡片背景 */
+  --ink: #242223;       /* 外框、區界線 */
+  --primary: #E8D575;   /* 選中的標籤、主要按鈕、我住的區、進行中徽章 */
+  --soft: #FFF4CC;      /* 鄰近區、提示橫幅、主題標籤、即將開課徽章 */
+  --soft-text: #7A5C00; /* 淡黃底上的文字 */
+  --text: #1A1A1A;      /* 主要文字；黃色底上的文字 */
+  --muted: #5C574D;     /* 次要文字（最淺只到這個灰） */
+  --gray-bg: #F7F7F7;   /* 其他區、0 門的區、已結束徽章 */
+  --warn: #D6331C;      /* 只用在警示文字和圖示 */
+}
+"""
+# 地圖：我住的區主色、鄰近區淡黃、其他區淺灰、0 門的區淺灰加灰字；區界線墨色；點選的區加粗墨框
+# 顏色都讀上面的 CSS 變數（自訂屬性會穿過元件的 shadow DOM 繼承下來），括號裡是備用值
 MAP_CSS = """
 .map { max-width: 780px; margin: 0 auto; }
 svg { width: 100%; height: auto; display: block; }
 .d { cursor: pointer; outline: none; }
-.a { stroke: #fff; stroke-width: 1.2; }
-.l { fill: none; stroke: #fff; stroke-width: 1.2; }
-.home .a { fill: #08519c; } .near .a { fill: #9ecae1; } .other .a { fill: #dcdcdc; }
-.zero .a { fill: #f6f6f6; } .home.zero .a { stroke: #08519c; stroke-width: 3; }
-.t.zero { fill: #777; }
-.d:hover .a, .d:focus-visible .a { filter: brightness(0.85); }
-.picked .a { stroke: #e66100; stroke-width: 4; }
+.a { stroke: var(--ink, #242223); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.l { fill: none; stroke: var(--ink, #242223); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.home .a { fill: var(--primary, #E8D575); } .near .a { fill: var(--soft, #FFF4CC); }
+.other .a, .zero .a { fill: var(--gray-bg, #F7F7F7); }
+.home.zero .a { fill: var(--primary, #E8D575); }
+.t.zero { fill: var(--muted, #5C574D); }
+.d:hover .a, .d:focus-visible .a { filter: brightness(0.92); }
+.picked .a { stroke: var(--ink, #242223); stroke-width: 4; }
 .t { font: 700 11px "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif; text-anchor: middle;
-     pointer-events: none; fill: #111; paint-order: stroke; stroke: #fff; stroke-width: 3px; }
-.t.home { fill: #fff; stroke: #08519c; }
+     pointer-events: none; fill: var(--text, #1A1A1A); paint-order: stroke; stroke: var(--card, #FFFFFF); stroke-width: 3px; }
 """
 # 點一區（或用鍵盤 Enter）就把區名傳回 Python
 MAP_JS = """
@@ -171,26 +188,30 @@ def merge_courses(rows: list[dict]) -> list[dict]:
 
 st.set_page_config(page_title="台南樂齡課程搜尋", layout="wide")
 # 使用者是長者和家屬：字放大、對比加深
+st.markdown(f"<style>{THEME_CSS}</style>", unsafe_allow_html=True)
 st.markdown("""<style>
 html, body, [class*="css"], .stMarkdown, p, li, label, input, button, td, th { font-size: 20px !important; }
 h1 { font-size: 34px !important; } h2, h3 { font-size: 26px !important; } h4 { font-size: 23px !important; }
-body, p, td, th, label { color: #111 !important; }
-button[kind^="primary"], button[kind^="primary"] p { color: #fff !important; }
-.card { border: 1px solid #999; border-radius: 10px; padding: 12px 14px; margin: 0 0 12px; background: #fff; }
+body, p, td, th, label { color: var(--text) !important; }
+.stApp { background: var(--bg); }
+/* 黃色底上的文字一律墨色，不用白字 */
+button[kind^="primary"], button[kind^="primary"] p { color: var(--text) !important; }
+button[kind^="primary"] { background: var(--primary) !important; border: 1.5px solid var(--ink) !important; }
+.card { border: 1.5px solid var(--ink); border-radius: 16px; padding: 12px 14px; margin: 0 0 12px; background: var(--card); }
 .card .name { font-weight: 700; font-size: 22px !important; }
 .card div { margin-top: 4px; }
-.card .k { color: #444; }
+.card .k { color: var(--muted); }
 .badge { display: inline-block; padding: 1px 10px; border-radius: 999px; font-weight: 700; margin-right: 8px;
-         border: 1.5px solid currentColor; }
-.s-today, .s-ongoing { color: #0a5c2b; background: #e3f4e8; } .s-upcoming { color: #08417a; background: #e2eefa; }
-.s-ended { color: #555; background: #eee; } .s-unknown { color: #7a4100; background: #fff1de; }
-.warn { color: #8a3b00; font-weight: 600; }
+         border: 1.5px solid var(--ink); color: var(--text); }
+.s-today, .s-ongoing { background: var(--primary); } .s-upcoming { background: var(--soft); color: var(--soft-text); }
+.s-ended, .s-unknown { background: var(--gray-bg); color: var(--muted); }
+.warn { color: var(--warn); font-weight: 700; }
 /* 多選的已選標籤顯示完整文字（預設不換行、會截成「音…」）：標籤不縮小，放不下就換到下一行 */
 [data-testid="stMultiSelectTagsContainer"] { flex-wrap: wrap !important; overflow: visible !important; row-gap: 4px;
   height: auto !important; min-width: 0; }
 .stMultiSelect .react-aria-ComboBox > div { height: auto !important; max-height: none !important; }
 [data-testid="stMultiSelectTagsContainer"] span { flex-shrink: 0 !important; text-overflow: clip !important; }
-a { color: #0645ad !important; text-decoration: underline; }
+a { color: var(--text) !important; text-decoration: underline; }
 </style>""", unsafe_allow_html=True)
 
 
