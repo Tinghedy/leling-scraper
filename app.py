@@ -16,6 +16,7 @@ from __future__ import annotations
 import csv
 import html
 import json
+import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -123,6 +124,49 @@ NEIGHBORS = {
 }
 DISTRICTS = sorted(NEIGHBORS)
 
+# ── 地點正規化：只用在顯示和分組，不改 data/courses.json ──
+_DIST = "|".join(DISTRICTS)
+_SUFFIX = ("社區照顧關懷據點", "社區關懷據點", "關懷據點", "社區活動中心", "社區發展協會", "里活動中心", "活動中心", "社區", "里")
+
+
+def norm_venue(v: str | None) -> str:
+    """「嘉田」「嘉田社區」→ 嘉田；「本部一樓」「本部1樓」→ 本部1樓；去掉括號、門牌地址、空白。
+    只拿掉明確的地址（有「X區…號」或「臺南市…」），不同地點（如「竹門國小」和「竹門社區」）不會變成一樣。"""
+    if not v:
+        return ""
+    s = re.sub(r"[(（][^)）]*[)）]", "", v)                       # 括號裡的補充說明或地址
+    s = re.sub(r"[-－:：]\s*[臺台]南市.*$", "", s)                 # 「喜樹國小-臺南市南區…」
+    s = re.sub(rf"\s+(?:[臺台]南市|{_DIST}).*$", "", s)            # 「文康中心 臺南市鹽水區…」
+    s = re.sub(rf"(?:[臺台]南市)?(?:{_DIST})\S*?號.*$", "", s)     # 「紫竹據點龍崎區龍船里5鄰11號」
+    s = re.sub(r"[\s\-－:：・]", "", s)
+    s = re.sub(r"([一二三四五])樓", lambda m: f"{'一二三四五'.index(m.group(1)) + 1}樓", s)
+    for suf in _SUFFIX:
+        if s.endswith(suf) and len(s) > len(suf) + 1:
+            s = s[: -len(suf)]
+            break
+    return s or v.strip()
+
+
+def merge_courses(rows: list[dict]) -> list[dict]:
+    """課名、中心、正規化地點、星期、時間都相同的列合併：上課日取聯集、原文連結全部保留。
+    顯示的地點用該組裡最長（資訊最多）的原始寫法。"""
+    groups: dict[tuple, list[dict]] = {}
+    for c in rows:
+        k = (c["course_name"], c["center"], norm_venue(c["venue"]), tuple(c["weekday"]), c["start_time"], c["end_time"])
+        groups.setdefault(k, []).append(c)
+    out = []
+    for g in groups.values():
+        m = dict(g[0])
+        m["dates"] = sorted({d for c in g for d in c.get("dates") or []})
+        m["start_date"], m["end_date"] = (m["dates"][0], m["dates"][-1]) if m["dates"] else (None, None)
+        m["venue"] = max((c["venue"] for c in g if c["venue"]), key=len, default=None)
+        m["domain"] = next((c["domain"] for c in g if c["domain"]), None)
+        m["time_slot"] = next((c["time_slot"] for c in g if c["time_slot"]), None)
+        m["source_urls"] = list(dict.fromkeys(c["source_url"] for c in g if c["source_url"]))
+        m["merged_rows"] = len(g)
+        out.append(m)
+    return out
+
 st.set_page_config(page_title="台南樂齡課程搜尋", layout="wide")
 # 使用者是長者和家屬：字放大、對比加深
 st.markdown("""<style>
@@ -140,7 +184,7 @@ a { color: #0645ad !important; text-decoration: underline; }
 
 @st.cache_data
 def load_courses(mtime: float) -> list[dict]:
-    return json.loads(COURSES.read_text(encoding="utf-8"))
+    return merge_courses(json.loads(COURSES.read_text(encoding="utf-8")))
 
 
 @st.cache_data
@@ -238,15 +282,7 @@ def sort_key(c: dict, today: str) -> tuple:
 
 
 def status_text(c: dict, today: str) -> str:
-    st_ = status(c, today)
-    nd = next_date(c, today)
-    if nd == today:
-        return "今天上課"
-    if st_ == "ongoing":
-        return "進行中" + (f"，下一堂 {md(nd).split('（')[0]}" if nd else "")
-    if st_ == "upcoming":
-        return f"即將開課，{md(nd).split('（')[0]} 開始"
-    return STATUS_ZH[st_]
+    return "今天上課" if next_date(c, today) == today else STATUS_ZH[status(c, today)]
 
 
 def md(d: str) -> str:
@@ -255,13 +291,21 @@ def md(d: str) -> str:
     return f"{m}/{dd}（{WEEKDAYS[date(y, m, dd).weekday()]}）"
 
 
-def date_text(c: dict) -> str:
+def short(d: str) -> str:
+    """2026-10-08 → 10/8"""
+    return md(d).split("（")[0]
+
+
+def date_text(c: dict, today: str) -> str:
+    """單堂：10/8；多堂：10/1～12/3，共 8 堂，下一堂 11/12"""
     ds = c.get("dates") or []
     if not ds:
         return "日期沒寫"
-    if len(ds) <= 4:
-        return "、".join(md(d).split("（")[0] for d in ds)
-    return f"{md(ds[0]).split('（')[0]}～{md(ds[-1]).split('（')[0]}，共 {len(ds)} 堂"
+    if len(ds) == 1:
+        return short(ds[0])
+    nd = next_date(c, today)
+    return (f"{short(ds[0])}～{short(ds[-1])}，共 {len(ds)} 堂"
+            + (f"，下一堂 {short(nd)}" if nd else ""))
 
 
 def when(c: dict) -> str:
@@ -370,14 +414,15 @@ if not shown:
 rows = []
 for c in sorted(shown, key=lambda c: sort_key(c, today)):
     inf = "、".join(FIELD_ZH.get(f, f) for f in c["inferred_fields"])
-    link = f'<a href="{html.escape(c["source_url"])}" target="_blank" rel="noopener">原文</a>' if c["source_url"] else ""
+    link = "　".join(f'<a href="{html.escape(u)}" target="_blank" rel="noopener">原文{i if i > 1 else ""}</a>'
+                     for i, u in enumerate(c["source_urls"], 1))
     rows.append("<tr>" + "".join(f"<td>{x}</td>" for x in (
         html.escape(status_text(c, today)),
         html.escape(c["course_name"] or "")
         + (f'<br><span class="warn">⚠ {missing_text(c)}，{phone_html(c["center"], PHONES)}</span>'
            if missing_text(c) else "")
         + (f'<br><span class="warn">⚠ 推論（原文沒明寫）：{html.escape(inf)}</span>' if inf and SHOW_INFERRED else ""),
-        html.escape(c["center"].replace("樂齡學習中心", "")), html.escape(date_text(c)), html.escape(when(c)), html.escape(c["venue"] or "沒寫"),
+        html.escape(c["center"].replace("樂齡學習中心", "")), html.escape(date_text(c, today)), html.escape(when(c)), html.escape(c["venue"] or "沒寫"),
         html.escape(c["domain"] or "—"), link)) + "</tr>")
 if rows:
     st.markdown('<table class="courses"><tr><th>狀態</th><th>課名</th><th>中心</th><th>日期</th><th>星期與時間</th><th>地點</th><th>主題</th>'
