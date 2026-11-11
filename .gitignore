@@ -12,8 +12,13 @@ __pycache__/
 .pseudonym_key
 *.tmp
 
+# 課表圖片：裡面可能有長輩的臉，不要上傳
+images/
+
 # 教育部樂齡學習網下載的課表附件
 moe/
 
 # 抽取結果、快取、抽樣：含貼文內容推出的資料，不上傳
-data/
+data/*
+# 例外：網站要用的課程資料。import_courses.py 已去識別化（無講師、課名地點去掉人名電話、無發文者）
+!data/courses.json
