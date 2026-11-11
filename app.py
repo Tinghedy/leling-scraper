@@ -231,6 +231,13 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
 .stButtonGroup button[aria-pressed="true"] { background: var(--primary) !important; }
 .stButtonGroup button[aria-pressed="true"] p { font-weight: 700 !important; }
 .stButtonGroup button[aria-pressed="true"] > div::before { content: "✓"; font-weight: 700; margin-right: 6px; }
+.st-key-home_banner { background: var(--soft); border: 1.5px solid var(--ink); border-radius: 16px; padding: 12px 16px; }
+.st-key-home_banner p { color: var(--soft-text) !important; }
+.st-key-home_banner [role="combobox"], .st-key-home_banner [data-baseweb="select"] > div { background: var(--card) !important; }
+.st-key-home_chip button { background: var(--primary) !important; border: 1.5px solid var(--ink) !important;
+  border-radius: 999px !important; padding: 0 20px !important; }
+.st-key-home_chip button p { font-weight: 700 !important; color: var(--text) !important; }
+.st-key-home_chip button p::before { content: "✓ "; }
 .stButtonGroup [role="toolbar"] { flex-wrap: wrap !important; gap: var(--gap) !important; }
 a { color: var(--text) !important; text-decoration: underline; }
 </style>""", unsafe_allow_html=True)
@@ -399,7 +406,7 @@ def when(c: dict) -> str:
     return f"{days} {t}"
 
 
-for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", "東區"), ("f_show_ended", False), ("f_all", False), ("picked", None)):
+for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", None), ("home_edit", False), ("f_show_ended", False), ("f_all", False), ("picked", None)):
     st.session_state.setdefault(k, v)
 
 
@@ -426,6 +433,26 @@ courses = load_courses(COURSES.stat().st_mtime)
 centers = load_centers()
 PHONES = {r["name"]: r["phone"].strip() for r in centers if (r.get("phone") or "").strip()}
 
+def set_home() -> None:
+    st.session_state.home = st.session_state.w_home
+    st.session_state.home_edit = False
+    st.session_state.picked = None
+
+
+# 我住在：還沒選＝淡黃提示橫幅＋選區；選了＝一顆選中狀態的標籤「我住在：東區」，點了可以改
+# （選單用另一個 key，避免選單沒畫出來時 Streamlit 把 home 清掉）
+if st.session_state.home is None or st.session_state.home_edit:
+    with st.container(key="home_banner"):
+        b1, b2 = st.columns([3, 2], vertical_alignment="center")
+        b1.markdown("**選你住的區，先看離家近的課**")
+        b2.selectbox("我住在", DISTRICTS, key="w_home", on_change=set_home, label_visibility="collapsed",
+                     index=DISTRICTS.index(st.session_state.home) if st.session_state.home else None,
+                     placeholder="請選擇行政區")
+else:
+    st.button(f"我住在：{st.session_state.home}", key="home_chip", help="點一下可以改住的區",
+              on_click=lambda: st.session_state.update(home_edit=True))
+home = st.session_state.home
+
 st.markdown("**篩選條件**")
 # 選項一變就重跑：地圖數字和列表都用同一份 hits
 # 手機寬度（< 640px）Streamlit 會把 columns 改成直向排列
@@ -434,9 +461,10 @@ st.pills("星期", WEEKDAYS, selection_mode="multi", key="f_weekday", format_fun
 st.pills("時段", list(SLOTS), selection_mode="multi", key="f_slot", format_func=SLOTS.get)
 st.pills("主題", [ALL, *DOMAINS], selection_mode="multi", key="w_domain", on_change=sync_domain,
          format_func=lambda d: f":material/{DOMAIN_ICONS[d]}: {d}")
-home = st.selectbox("我住在", DISTRICTS, key="home")
+
 st.toggle("顯示已結束的課", key="f_show_ended")
-st.toggle("看全台南的課", key="f_all")
+if st.session_state.home:
+    st.toggle("看全台南的課", key="f_all")
 
 today = today_tpe()
 FILTER_KEYS = ("f_weekday", "f_slot", "f_domain", "f_show_ended")
@@ -455,10 +483,10 @@ hits = filtered(params)            # 確定符合：地圖數字、標題門數�
 unsure = filtered(params, "maybe")  # 沒選星期和時段時一定是空的，就不分段
 
 picked = st.session_state.picked
-near = set(NEIGHBORS.get(home, []))
-mine = {home} | near
-# 列表看哪些區：點了地圖上的區＝只看那區；開了「看全台南的課」＝全部；預設＝住的區＋鄰近區
-area = {picked} if picked else None if st.session_state.f_all else mine
+near = set(NEIGHBORS.get(home, [])) if home else set()
+mine = {home} | near if home else set()
+# 列表看哪些區：點了地圖上的區＝只看那區；還沒選住的區或開了「看全台南的課」＝全部；預設＝住的區＋鄰近區
+area = {picked} if picked else None if (st.session_state.f_all or not home) else mine
 
 
 def in_view(rows: list[dict]) -> list[dict]:
@@ -468,6 +496,8 @@ def in_view(rows: list[dict]) -> list[dict]:
 def sectioned(rows: list[dict]) -> list[tuple[str, list[dict]]]:
     if picked:
         return [(picked, rows)]
+    if not home:
+        return [("全台南", rows)]
     out = [(home, [c for c in rows if c["district"] == home]),
            ("鄰近區", [c for c in rows if c["district"] in near])]
     if area is None:
@@ -518,8 +548,8 @@ with col_list:
     if n_no_time and not shown_unsure:
         st.caption(f"其中 {n_no_time} 門沒寫上課日期或時間，排在最後面。")
     if picked:
-        st.button(f"回到我住的區和鄰近區（{home}）", type="primary", use_container_width=True,
-                  on_click=apply, kwargs={"picked": None, "f_all": False})
+        st.button(f"回到我住的區和鄰近區（{home}）" if home else "回到全台南的課", type="primary",
+                  use_container_width=True, on_click=apply, kwargs={"picked": None, "f_all": False})
 
     # 查無結果：列出「只放寬一個條件」各有幾門，點了直接套用
     if not shown:
@@ -528,7 +558,7 @@ with col_list:
 
         here = "同區" if picked else ""
         options = []
-        if picked:
+        if picked and home:
             options.append((f"{home}和鄰近區", count(mine), {"picked": None, "f_all": False}))
         if area is not None:
             options.append(("全台南", count(None), {"picked": None, "f_all": True}))
@@ -575,8 +605,8 @@ with col_map:
     if result.clicked:  # 點同一區＝取消，點別區＝換過去
         st.session_state.picked = None if result.clicked == picked else result.clicked
         st.rerun()
-    st.caption(f"深藍＝你住的{home}，淺藍＝相鄰的區，灰色＝其他區，最淡＝沒有符合的課；"
-               "區名下的數字是符合目前所有條件的課數。點一區只看那區的課，再點一次取消。")
+    st.caption((f"黃色＝你住的{home}，淡黃＝相鄰的區，" if home else "")
+               + "灰色＝其他區，灰字 0＝沒有符合的課；區名下的數字是符合目前所有條件的課數。點一區只看那區的課，再點一次取消。")
 
 # ── 頁尾：關於這份資料 ──
 with st.expander("關於這份資料"):
