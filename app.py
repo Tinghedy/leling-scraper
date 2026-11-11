@@ -46,6 +46,8 @@ svg { width: 100%; height: auto; display: block; }
 .a { stroke: #fff; stroke-width: 1.2; }
 .l { fill: none; stroke: #fff; stroke-width: 1.2; }
 .home .a { fill: #08519c; } .near .a { fill: #9ecae1; } .other .a { fill: #dcdcdc; }
+.zero .a { fill: #f6f6f6; } .home.zero .a { stroke: #08519c; stroke-width: 3; }
+.t.zero { fill: #777; }
 .d:hover .a, .d:focus-visible .a { filter: brightness(0.85); }
 .picked .a { stroke: #e66100; stroke-width: 4; }
 .t { font: 700 11px "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif; text-anchor: middle;
@@ -154,12 +156,14 @@ def map_svg(home: str, near: set[str], counts: dict[str, int], picked: str | Non
     for d in sorted(m["districts"], key=lambda d: d["name"] == picked):
         name, n = d["name"], counts.get(d["name"], 0)
         tier = "home" if name == home else "near" if name in near else "other"
+        if n == 0:  # 符合 0 門：不論遠近都用最淡的底色（住的區留深藍框）
+            tier += " zero"
         paths = "".join(f'<path class="a" d="{p}"/>' for p in d["areas"]) + \
             "".join(f'<path class="l" d="{p}"/>' for p in d["lines"])
         groups.append(f'<g class="d {tier}{" picked" if name == picked else ""}" data-name="{name}" tabindex="0" '
                       f'role="button" aria-label="{name}，{n} 門課"><title>{name}：{n} 門</title>{paths}</g>')
         x, y = d["label"]
-        labels.append(f'<text class="t {tier}" x="{x}" y="{y}"><tspan x="{x}" dy="-0.15em">{name}</tspan>'
+        labels.append(f'<text class="t {tier.replace("home zero", "zero")}" x="{x}" y="{y}"><tspan x="{x}" dy="-0.15em">{name}</tspan>'
                       f'<tspan x="{x}" dy="1.15em">{n}</tspan></text>')
     return (f'<svg viewBox="0 0 {m["width"]} {m["height"]}" aria-label="臺南市行政區地圖">'
             + "".join(groups) + "".join(labels) + "</svg>")
@@ -245,7 +249,7 @@ def when(c: dict) -> str:
     return f"{days} {t}"
 
 
-for k, v in (("f_date", []), ("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", "東區"), ("f_keep_no_time", True), ("f_show_ended", False), ("picked", None)):
+for k, v in (("f_date", []), ("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", "東區"), ("f_keep_no_time", True), ("f_show_ended", False), ("picked", None), ("picked_near", False)):
     st.session_state.setdefault(k, v)
 
 st.title("台南樂齡課程搜尋")
@@ -257,21 +261,36 @@ centers = load_centers()
 
 st.markdown("**篩選條件**")
 all_dates = sorted({d for c in courses for d in c.get("dates") or []})
-# 放在 form 裡：選好所有條件後按「送出」才一次套用，不會每改一格就重跑
-with st.form("filters", border=False):
-    c0, c1, c2, c3, c4 = st.columns(5)
-    days = c0.multiselect("日期", all_dates, key="f_date", format_func=md, placeholder="例如 10/8")
-    wd = c1.multiselect("星期", WEEKDAYS, key="f_weekday", format_func=lambda w: "週" + w)
-    slot = c2.multiselect("時段", list(SLOTS), key="f_slot", format_func=SLOTS.get)
-    dom = c3.multiselect("主題", DOMAINS, key="f_domain")
-    home = c4.selectbox("我住在", DISTRICTS, key="home")
-    keep_no_time = st.checkbox("包含沒寫日期／星期／時間的課", key="f_keep_no_time")
-    show_ended = st.toggle("顯示已結束的課", key="f_show_ended")
-    st.form_submit_button("送出", type="primary")
+# 選項一變就重跑：地圖數字和列表都用同一份 hits
+c0, c1, c2, c3, c4 = st.columns(5)
+c0.multiselect("日期", all_dates, key="f_date", format_func=md, placeholder="例如 10/8")
+c1.multiselect("星期", WEEKDAYS, key="f_weekday", format_func=lambda w: "週" + w)
+c2.multiselect("時段", list(SLOTS), key="f_slot", format_func=SLOTS.get)
+c3.multiselect("主題", DOMAINS, key="f_domain")
+home = c4.selectbox("我住在", DISTRICTS, key="home")
+st.checkbox("包含沒寫日期／星期／時間的課", key="f_keep_no_time")
+st.toggle("顯示已結束的課", key="f_show_ended")
 
 today = today_tpe()
-hits = [c for c in courses if matches(c, days, wd, slot, dom, keep_no_time)
-        and (show_ended or status(c, today) != "ended")]
+FILTER_KEYS = ("f_date", "f_weekday", "f_slot", "f_domain", "f_keep_no_time", "f_show_ended")
+
+
+def filtered(p: dict) -> list[dict]:
+    """p：FILTER_KEYS 對應的值。地圖、列表、放寬建議都經過這裡，條件才會一致。"""
+    return [c for c in courses
+            if matches(c, p["f_date"], p["f_weekday"], p["f_slot"], p["f_domain"], p["f_keep_no_time"])
+            and (p["f_show_ended"] or status(c, today) != "ended")]
+
+
+def scope(picked: str | None, with_near: bool) -> set[str] | None:
+    """點選的區（加上鄰近區）；None＝全台南"""
+    if not picked:
+        return None
+    return {picked} | (set(NEIGHBORS.get(picked, [])) if with_near else set())
+
+
+params = {k: st.session_state[k] for k in FILTER_KEYS}
+hits = filtered(params)
 
 # ── 地圖：行政區分層設色 ──
 near = set(NEIGHBORS.get(home, []))
@@ -282,17 +301,50 @@ for c in hits:
 result = district_map(data=map_svg(home, near, counts, picked), key="district_map", on_clicked_change=lambda: None)
 if result.clicked:  # 點同一區＝取消，點別區＝換過去
     st.session_state.picked = None if result.clicked == picked else result.clicked
+    st.session_state.picked_near = False
     st.rerun()
-st.caption(f"深藍＝你住的{home}，淺藍＝相鄰的區，灰色＝其他區；區名下的數字是符合目前條件的課數。"
-           "點一區只看那區的課，再點一次取消。")
+st.caption(f"深藍＝你住的{home}，淺藍＝相鄰的區，灰色＝其他區，最淡＝沒有符合的課；"
+           "區名下的數字是符合目前所有條件的課數。點一區只看那區的課，再點一次取消。")
 
 # ── 課程清單 ──
-shown = [c for c in hits if not picked or c["district"] == picked]
-head = f"符合條件的課：{len(shown)} 門" + (f"（只看{picked}）" if picked else "")
+area = scope(picked, st.session_state.picked_near)
+shown = [c for c in hits if area is None or c["district"] in area]
+where = f"{picked}和鄰近區" if picked and st.session_state.picked_near else picked
+head = f"符合條件的課：{len(shown)} 門" + (f"（只看{where}）" if picked else "")
 st.subheader(head)
-if picked and st.button("看全部行政區的課"):
-    st.session_state.picked = None
-    st.rerun()
+
+
+def apply(**kv) -> None:
+    for k, v in kv.items():
+        st.session_state[k] = v
+
+
+if picked:
+    st.button("看全部行政區的課", on_click=apply, kwargs={"picked": None, "picked_near": False})
+
+# 查無結果：列出「只放寬一個條件」各有幾門，點了直接套用
+if not shown:
+    def count(area_: set[str] | None, **change) -> int:
+        return sum(1 for c in filtered({**params, **change}) if area_ is None or c["district"] in area_)
+
+    here = "同區" if picked else ""
+    options = []
+    if picked and not st.session_state.picked_near:
+        options.append(("鄰近區", count(scope(picked, True)), {"picked_near": True}))
+    if picked:
+        options.append(("全台南", count(None), {"picked": None, "picked_near": False}))
+    for key, label in (("f_weekday", f"{here}其他星期"), ("f_slot", f"{here}其他時段"),
+                       ("f_domain", f"{here}其他主題"), ("f_date", f"{here}其他日期")):
+        if params[key]:
+            options.append((label, count(area, **{key: []}), {key: []}))
+    if not params["f_keep_no_time"]:
+        options.append((f"{here}時間沒寫的課", count(area, f_keep_no_time=True), {"f_keep_no_time": True}))
+    if not params["f_show_ended"]:
+        options.append((f"{here}已結束的課", count(area, f_show_ended=True), {"f_show_ended": True}))
+    options = [o for o in options if o[1]]
+    st.markdown("**這個條件下沒有課。**" + ("可以試試放寬一個條件：" if options else "請放寬條件。"))
+    for i, (label, n, change) in enumerate(options):
+        st.button(f"{label}有 {n} 門", key=f"relax_{i}", on_click=apply, kwargs=change)
 rows = []
 for c in sorted(shown, key=lambda c: sort_key(c, today)):
     inf = "、".join(FIELD_ZH.get(f, f) for f in c["inferred_fields"])
@@ -304,9 +356,9 @@ for c in sorted(shown, key=lambda c: sort_key(c, today)):
         + (f'<br><span class="warn">⚠ 推論（原文沒明寫）：{html.escape(inf)}</span>' if inf and SHOW_INFERRED else ""),
         html.escape(c["center"].replace("樂齡學習中心", "")), html.escape(date_text(c)), html.escape(when(c)), html.escape(c["venue"] or "沒寫"),
         html.escape(c["domain"] or "—"), link)) + "</tr>")
-st.markdown('<table class="courses"><tr><th>狀態</th><th>課名</th><th>中心</th><th>日期</th><th>星期與時間</th><th>地點</th><th>主題</th>'
-            '<th>原文</th></tr>' + "".join(rows) + "</table>" if rows else "沒有符合的課，請放寬條件。",
-            unsafe_allow_html=True)
+if rows:
+    st.markdown('<table class="courses"><tr><th>狀態</th><th>課名</th><th>中心</th><th>日期</th><th>星期與時間</th><th>地點</th><th>主題</th>'
+                '<th>原文</th></tr>' + "".join(rows) + "</table>", unsafe_allow_html=True)
 
 # ── 側邊欄：資料涵蓋範圍 ──
 st.sidebar.header("資料涵蓋範圍")
