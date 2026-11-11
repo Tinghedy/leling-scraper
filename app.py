@@ -173,7 +173,7 @@ st.set_page_config(page_title="台南樂齡課程搜尋", layout="wide")
 # 使用者是長者和家屬：字放大、對比加深
 st.markdown("""<style>
 html, body, [class*="css"], .stMarkdown, p, li, label, input, button, td, th { font-size: 20px !important; }
-h1 { font-size: 34px !important; } h2, h3 { font-size: 26px !important; }
+h1 { font-size: 34px !important; } h2, h3 { font-size: 26px !important; } h4 { font-size: 23px !important; }
 body, p, td, th, label { color: #111 !important; }
 button[kind^="primary"], button[kind^="primary"] p { color: #fff !important; }
 .card { border: 1px solid #999; border-radius: 10px; padding: 12px 14px; margin: 0 0 12px; background: #fff; }
@@ -341,7 +341,7 @@ def when(c: dict) -> str:
     return f"{days} {t}"
 
 
-for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", "東區"), ("f_keep_no_time", True), ("f_show_ended", False), ("f_full_map", False), ("picked", None), ("picked_near", False)):
+for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", "東區"), ("f_keep_no_time", True), ("f_show_ended", False), ("f_all", False), ("picked", None)):
     st.session_state.setdefault(k, v)
 
 st.title("台南樂齡課程搜尋")
@@ -362,6 +362,7 @@ c3.multiselect("主題", DOMAINS, key="f_domain", placeholder="請選擇")
 home = c4.selectbox("我住在", DISTRICTS, key="home")
 st.checkbox("也顯示時間沒寫的課", key="f_keep_no_time")
 st.toggle("顯示已結束的課", key="f_show_ended")
+st.toggle("看全台南的課", key="f_all")
 
 today = today_tpe()
 FILTER_KEYS = ("f_weekday", "f_slot", "f_domain", "f_keep_no_time", "f_show_ended")
@@ -374,20 +375,22 @@ def filtered(p: dict) -> list[dict]:
             and (p["f_show_ended"] or status(c, today) != "ended")]
 
 
-def scope(picked: str | None, with_near: bool) -> set[str] | None:
-    """點選的區（加上鄰近區）；None＝全台南"""
-    if not picked:
-        return None
-    return {picked} | (set(NEIGHBORS.get(picked, [])) if with_near else set())
-
-
 params = {k: st.session_state[k] for k in FILTER_KEYS}
 hits = filtered(params)
 
 picked = st.session_state.picked
 near = set(NEIGHBORS.get(home, []))
-area = scope(picked, st.session_state.picked_near)
+mine = {home} | near
+# 列表看哪些區：點了地圖上的區＝只看那區；開了「看全台南的課」＝全部；預設＝住的區＋鄰近區
+area = {picked} if picked else None if st.session_state.f_all else mine
 shown = sorted((c for c in hits if area is None or c["district"] in area), key=lambda c: sort_key(c, today))
+if picked:
+    sections = [(picked, shown)]
+else:
+    sections = [(home, [c for c in shown if c["district"] == home]),
+                ("鄰近區", [c for c in shown if c["district"] in near])]
+    if area is None:
+        sections.append(("其他區", [c for c in shown if c["district"] not in mine]))
 counts: dict[str, int] = {}
 for c in hits:
     counts[c["district"]] = counts.get(c["district"], 0) + 1
@@ -421,13 +424,14 @@ col_list, col_map = st.columns([11, 9], gap="large")
 
 # ── 課程列表 ──
 with col_list:
-    where = f"{picked}和鄰近區" if picked and st.session_state.picked_near else picked
-    st.subheader(f"符合條件的課：{len(shown)} 門" + (f"（只看{where}）" if picked else ""))
+    where = f"只看{picked}" if picked else "全台南" if area is None else f"{home}和鄰近區"
+    st.subheader(f"符合條件的課：{len(shown)} 門（{where}）")
     n_no_time = sum(1 for c in shown if no_time(c))
     if n_no_time:
         st.caption(f"其中 {n_no_time} 門沒寫上課日期或時間，排在最後面。")
     if picked:
-        st.button("看全部行政區的課", on_click=apply, kwargs={"picked": None, "picked_near": False})
+        st.button(f"回到我住的區和鄰近區（{home}）", type="primary", use_container_width=True,
+                  on_click=apply, kwargs={"picked": None, "f_all": False})
 
     # 查無結果：列出「只放寬一個條件」各有幾門，點了直接套用
     if not shown:
@@ -436,10 +440,10 @@ with col_list:
 
         here = "同區" if picked else ""
         options = []
-        if picked and not st.session_state.picked_near:
-            options.append(("鄰近區", count(scope(picked, True)), {"picked_near": True}))
         if picked:
-            options.append(("全台南", count(None), {"picked": None, "picked_near": False}))
+            options.append((f"{home}和鄰近區", count(mine), {"picked": None, "f_all": False}))
+        if area is not None:
+            options.append(("全台南", count(None), {"picked": None, "f_all": True}))
         for key, label in (("f_weekday", f"{here}其他星期"), ("f_slot", f"{here}其他時段"),
                            ("f_domain", f"{here}其他主題")):
             if params[key]:
@@ -452,27 +456,30 @@ with col_list:
         st.markdown("**這個條件下沒有課。**" + ("可以試試放寬一個條件：" if options else "請放寬條件。"))
         for i, (label, n, change) in enumerate(options):
             st.button(f"{label}有 {n} 門", key=f"relax_{i}", on_click=apply, kwargs=change)
-
-    # 一次顯示 PAGE 門，條件一變就回到第一頁，避免手機上要捲很久才看到地圖
-    PAGE = 20
-    sig = repr((params, picked, st.session_state.picked_near))
-    if st.session_state.get("list_sig") != sig:
-        st.session_state.list_sig, st.session_state.n_show = sig, PAGE
-    st.markdown("".join(card(c) for c in shown[: st.session_state.n_show]), unsafe_allow_html=True)
-    if len(shown) > st.session_state.n_show:
-        rest = len(shown) - st.session_state.n_show
-        st.button(f"再顯示 {min(PAGE, rest)} 門（還有 {rest} 門）", on_click=apply,
-                  kwargs={"n_show": st.session_state.n_show + PAGE})
+    else:
+        # 分區小標題；每區內依下一次上課日排序。一次顯示 PAGE 門（跨區累計），條件一變就回到前 PAGE 門
+        PAGE = 20
+        sig = repr((params, home, picked, area is None))
+        if st.session_state.get("list_sig") != sig:
+            st.session_state.list_sig, st.session_state.n_show = sig, PAGE
+        budget = st.session_state.n_show
+        for title, items in sections:
+            st.markdown(f"#### {title} {len(items)} 門")
+            st.markdown("".join(card(c) for c in items[:max(budget, 0)]), unsafe_allow_html=True)
+            budget -= len(items)
+        if budget < 0:
+            rest = -budget
+            st.button(f"再顯示 {min(PAGE, rest)} 門（還有 {rest} 門）", on_click=apply,
+                      kwargs={"n_show": st.session_state.n_show + PAGE})
 
 # ── 地圖：行政區分層設色，預設放大到住的區和鄰近區 ──
 with col_map:
-    full = st.toggle("看全台南地圖", key="f_full_map")
-    focus = None if full else {home} | near | (area or set())
+    # 預設放大到住的區和鄰近區（加上點選的區）；開「看全台南的課」時看全圖
+    focus = None if area is None else mine | (area or set())
     result = district_map(data=map_svg(home, near, counts, picked, focus), key="district_map",
                           on_clicked_change=lambda: None)
     if result.clicked:  # 點同一區＝取消，點別區＝換過去
         st.session_state.picked = None if result.clicked == picked else result.clicked
-        st.session_state.picked_near = False
         st.rerun()
     st.caption(f"深藍＝你住的{home}，淺藍＝相鄰的區，灰色＝其他區，最淡＝沒有符合的課；"
                "區名下的數字是符合目前所有條件的課數。點一區只看那區的課，再點一次取消。")
