@@ -16,10 +16,16 @@ from __future__ import annotations
 import csv
 import html
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import streamlit as st
+
+try:
+    from zoneinfo import ZoneInfo
+    TPE = ZoneInfo("Asia/Taipei")
+except Exception:  # 沒有時區資料庫時：台灣沒有日光節約，固定 UTC+8 等價
+    TPE = timezone(timedelta(hours=8))
 
 BASE = Path(__file__).resolve().parent
 COURSES = BASE / "data" / "courses.json"
@@ -70,6 +76,7 @@ export default function(component) {
 """
 district_map = st.components.v2.component("tainan_district_map", css=MAP_CSS, js=MAP_JS)
 SHOW_INFERRED = False  # 清單裡要不要標「⚠ 推論（原文沒明寫）」；暫時隱藏
+STATUS_ZH = {"upcoming": "即將開課", "ongoing": "進行中", "ended": "已結束", "unknown": "日期沒寫"}
 SOURCE_ZH = {"moe_doc": "教育部樂齡學習網公告", "fb_post": "FB 貼文"}
 
 # 台南 37 區的相鄰關係：由內政部鄉鎮界線（taiwan-atlas towns-10t）算出，邊界有共用頂點就算相鄰
@@ -178,6 +185,45 @@ def matches(c: dict, days: list, wd: list, slot: list, dom: list, keep_no_time: 
             and (not dom or c["domain"] in dom))
 
 
+def today_tpe() -> str:
+    """執行當下的台北日期，YYYY-MM-DD（和 dates 同格式，可以直接比字串）"""
+    return datetime.now(TPE).date().isoformat()
+
+
+def status(c: dict, today: str) -> str:
+    """dates 已排序且都有年份。最後一個上課日過了才算已結束；沒有日期的視為未結束（unknown）。"""
+    ds = c.get("dates") or []
+    if not ds:
+        return "unknown"
+    if ds[-1] < today:
+        return "ended"
+    return "upcoming" if ds[0] > today else "ongoing"
+
+
+def next_date(c: dict, today: str) -> str | None:
+    return next((d for d in c.get("dates") or [] if d >= today), None)
+
+
+def sort_key(c: dict, today: str) -> tuple:
+    """未結束的照下一次上課日由近到遠（沒日期的排後面）；已結束的放最後，最近結束的在前。"""
+    if status(c, today) == "ended":
+        return (1, -date.fromisoformat(c["dates"][-1]).toordinal(), c["center"])
+    nd = next_date(c, today)
+    return (0, date.fromisoformat(nd).toordinal() if nd else 10**9, c["center"])
+
+
+def status_text(c: dict, today: str) -> str:
+    st_ = status(c, today)
+    nd = next_date(c, today)
+    if nd == today:
+        return "今天上課"
+    if st_ == "ongoing":
+        return "進行中" + (f"，下一堂 {md(nd).split('（')[0]}" if nd else "")
+    if st_ == "upcoming":
+        return f"即將開課，{md(nd).split('（')[0]} 開始"
+    return STATUS_ZH[st_]
+
+
 def md(d: str) -> str:
     """2026-10-08 → 10/8（三）"""
     y, m, dd = (int(x) for x in d.split("-"))
@@ -199,7 +245,7 @@ def when(c: dict) -> str:
     return f"{days} {t}"
 
 
-for k, v in (("f_date", []), ("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", "東區"), ("f_keep_no_time", True), ("picked", None)):
+for k, v in (("f_date", []), ("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", "東區"), ("f_keep_no_time", True), ("f_show_ended", False), ("picked", None)):
     st.session_state.setdefault(k, v)
 
 st.title("台南樂齡課程搜尋")
@@ -220,9 +266,12 @@ with st.form("filters", border=False):
     dom = c3.multiselect("主題", DOMAINS, key="f_domain")
     home = c4.selectbox("我住在", DISTRICTS, key="home")
     keep_no_time = st.checkbox("包含沒寫日期／星期／時間的課", key="f_keep_no_time")
+    show_ended = st.toggle("顯示已結束的課", key="f_show_ended")
     st.form_submit_button("送出", type="primary")
 
-hits = [c for c in courses if matches(c, days, wd, slot, dom, keep_no_time)]
+today = today_tpe()
+hits = [c for c in courses if matches(c, days, wd, slot, dom, keep_no_time)
+        and (show_ended or status(c, today) != "ended")]
 
 # ── 地圖：行政區分層設色 ──
 near = set(NEIGHBORS.get(home, []))
@@ -245,18 +294,17 @@ if picked and st.button("看全部行政區的課"):
     st.session_state.picked = None
     st.rerun()
 rows = []
-# 住的區排最前面，再來相鄰區，其他區最後；同一層照開課日期
-tier = lambda c: 0 if c["district"] == home else 1 if c["district"] in near else 2  # noqa: E731
-for c in sorted(shown, key=lambda c: (tier(c), c["start_date"] or "9999", c["center"])):
+for c in sorted(shown, key=lambda c: sort_key(c, today)):
     inf = "、".join(FIELD_ZH.get(f, f) for f in c["inferred_fields"])
     link = f'<a href="{html.escape(c["source_url"])}" target="_blank" rel="noopener">原文</a>' if c["source_url"] else ""
     rows.append("<tr>" + "".join(f"<td>{x}</td>" for x in (
+        html.escape(status_text(c, today)),
         html.escape(c["course_name"] or "")
         + ('<br><span class="warn">⚠ 原文未註明日期／時間</span>' if no_time(c) else "")
         + (f'<br><span class="warn">⚠ 推論（原文沒明寫）：{html.escape(inf)}</span>' if inf and SHOW_INFERRED else ""),
         html.escape(c["center"].replace("樂齡學習中心", "")), html.escape(date_text(c)), html.escape(when(c)), html.escape(c["venue"] or "沒寫"),
         html.escape(c["domain"] or "—"), link)) + "</tr>")
-st.markdown('<table class="courses"><tr><th>課名</th><th>中心</th><th>日期</th><th>星期與時間</th><th>地點</th><th>主題</th>'
+st.markdown('<table class="courses"><tr><th>狀態</th><th>課名</th><th>中心</th><th>日期</th><th>星期與時間</th><th>地點</th><th>主題</th>'
             '<th>原文</th></tr>' + "".join(rows) + "</table>" if rows else "沒有符合的課，請放寬條件。",
             unsafe_allow_html=True)
 
