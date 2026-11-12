@@ -253,6 +253,7 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
 .st-key-home_chip button p { font-weight: 700 !important; color: var(--text) !important; }
 .st-key-home_chip button p::before { content: "✓ "; }
 .result-line { font-size: 22px !important; margin: 0; }
+.st-key-status_row { margin-top: 8px; }
 .result-line b { font-size: 26px; }
 .result-line .sep { color: var(--muted); }
 /* 手機上的地圖：預設收起，圓形按鈕打開成全螢幕；桌機維持列表在左、地圖在右，按鈕隱藏 */
@@ -618,20 +619,21 @@ def card(c: dict) -> str:
 
 
 where = f"只看{picked}" if picked else "全台南" if area is None else f"{home}和鄰近區"
-# 結果列：「符合 N 門 · 資料更新於 YYYY/MM/DD」＋狀態標籤
-# 放在列表和地圖的上方、整頁寬，桌機上門數和狀態標籤才排得下同一行
-r1, r2 = st.columns([1, 1], vertical_alignment="center")
-r1.markdown(f'<p class="result-line">符合 <b>{len(shown)}</b> 門（{html.escape(where)}）'
-            f'<span class="sep"> · </span>資料更新於 {data_updated(COURSES.stat().st_mtime).replace("-", "/")}</p>',
-            unsafe_allow_html=True)
-r2.pills("狀態", list(STATUS_PILLS), selection_mode="multi", key="f_status", format_func=STATUS_PILLS.get,
-         label_visibility="collapsed")
 
 # 桌機：列表在左、地圖在右；手機（< 640px）columns 直向排列，列表就在篩選條件下方、地圖上方
 col_list, col_map = st.columns([11, 9], gap="large")
 
 # ── 課程列表 ──
 with col_list:
+    # 結果列：「符合 N 門 · 資料更新於 YYYY/MM/DD」＋狀態標籤，放在列表欄裡，
+    # 狀態標籤放在下一行、靠右（Streamlit 內建的水平 container），右緣和課程卡片對齊
+    with st.container(key="result_row"):
+        st.markdown(f'<p class="result-line">符合 <b>{len(shown)}</b> 門（{html.escape(where)}）'
+                    f'<span class="sep"> · </span>資料更新於 {data_updated(COURSES.stat().st_mtime).replace("-", "/")}</p>',
+                    unsafe_allow_html=True)
+        with st.container(horizontal=True, horizontal_alignment="right", key="status_row"):
+            st.pills("狀態", list(STATUS_PILLS), selection_mode="multi", key="f_status", format_func=STATUS_PILLS.get,
+                     label_visibility="collapsed")
     n_no_time = sum(1 for c in shown if no_time(c))
     if n_no_time and not shown_unsure:
         st.caption(f"其中 {n_no_time} 門沒寫上課日期或時間，排在最後面。")
