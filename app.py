@@ -271,6 +271,13 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
   .st-key-map_fab button > div, .st-key-map_fab button > div > span { flex-direction: column !important; gap: 0 !important;
                                                                       display: flex; align-items: center; }
 }
+/* 我住在＋篩選條件釘在上方（sticky）：要掛在外層的 stLayoutWrapper（它才是主欄的直接子元素）；
+   米白底蓋住捲過去的內容，下緣一條墨線分隔。手機上篩選區幾乎一整個螢幕高，釘住會把列表擋掉，所以只在桌機釘 */
+@media (min-width: 641px) {
+  [data-testid="stLayoutWrapper"]:has(> .st-key-filters) { position: sticky; top: 3.75rem; z-index: 990; }
+  .st-key-filters { background: var(--bg); padding: 8px 0 12px; border-bottom: 1.5px solid var(--ink); }
+}
+.st-key-filters .stButtonGroup label, .st-key-filters [data-testid="stWidgetLabel"] { margin-bottom: 0; }
 .stButtonGroup [role="toolbar"] { flex-wrap: wrap !important; gap: var(--gap) !important; }
 a { color: var(--text) !important; text-decoration: underline; }
 </style>""", unsafe_allow_html=True)
@@ -474,26 +481,28 @@ def set_home() -> None:
 
 # 我住在：還沒選＝淡黃提示橫幅＋選區；選了＝一顆選中狀態的標籤「我住在：東區」，點了可以改
 # （選單用另一個 key，避免選單沒畫出來時 Streamlit 把 home 清掉）
-if st.session_state.home is None or st.session_state.home_edit:
-    with st.container(key="home_banner"):
-        b1, b2 = st.columns([3, 2], vertical_alignment="center")
-        b1.markdown("**選你住的區，先看離家近的課**")
-        b2.selectbox("我住在", DISTRICTS, key="w_home", on_change=set_home, label_visibility="collapsed",
-                     index=DISTRICTS.index(st.session_state.home) if st.session_state.home else None,
-                     placeholder="請選擇行政區")
-else:
-    st.button(f"我住在：{st.session_state.home}", key="home_chip", help="點一下可以改住的區",
-              on_click=lambda: st.session_state.update(home_edit=True))
-home = st.session_state.home
+# 我住在＋篩選條件釘在畫面上方：往下捲看課程時也能隨時改條件（樣式見 .st-key-filters）
+with st.container(key="filters"):
+    if st.session_state.home is None or st.session_state.home_edit:
+        with st.container(key="home_banner"):
+            b1, b2 = st.columns([3, 2], vertical_alignment="center")
+            b1.markdown("**選你住的區，先看離家近的課**")
+            b2.selectbox("我住在", DISTRICTS, key="w_home", on_change=set_home, label_visibility="collapsed",
+                         index=DISTRICTS.index(st.session_state.home) if st.session_state.home else None,
+                         placeholder="請選擇行政區")
+    else:
+        st.button(f"我住在：{st.session_state.home}", key="home_chip", help="點一下可以改住的區",
+                  on_click=lambda: st.session_state.update(home_edit=True))
+    home = st.session_state.home
 
-st.markdown("**篩選條件**")
-# 選項一變就重跑：地圖數字和列表都用同一份 hits
-# 手機寬度（< 640px）Streamlit 會把 columns 改成直向排列
-# 膠囊標籤可複選；手機上自動換行（不做左右滑動）
-st.pills("星期", WEEKDAYS, selection_mode="multi", key="f_weekday", format_func=lambda w: "週" + w)
-st.pills("時段", list(SLOTS), selection_mode="multi", key="f_slot", format_func=SLOTS.get)
-st.pills("主題", [ALL, *DOMAINS], selection_mode="multi", key="w_domain", on_change=sync_domain,
-         format_func=lambda d: f":material/{DOMAIN_ICONS[d]}: {d}")
+    st.markdown("**篩選條件**")
+    # 選項一變就重跑：地圖數字和列表都用同一份 hits
+    # 手機寬度（< 640px）Streamlit 會把 columns 改成直向排列
+    # 膠囊標籤可複選；手機上自動換行（不做左右滑動）
+    st.pills("星期", WEEKDAYS, selection_mode="multi", key="f_weekday", format_func=lambda w: "週" + w)
+    st.pills("時段", list(SLOTS), selection_mode="multi", key="f_slot", format_func=SLOTS.get)
+    st.pills("主題", [ALL, *DOMAINS], selection_mode="multi", key="w_domain", on_change=sync_domain,
+             format_func=lambda d: f":material/{DOMAIN_ICONS[d]}: {d}")
 
 st.toggle("顯示已結束的課", key="f_show_ended")
 if st.session_state.home:
