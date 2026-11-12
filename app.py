@@ -381,6 +381,8 @@ h2, h3 { font-size: 26px !important; } h4 { font-size: 23px !important; }
 
 body, p, td, th, label { color: var(--text) !important; }
 .stApp { background: var(--bg); }
+/* 頂端工具列用實色底：不然捲到下面的字會從摘要列上方透出來 */
+[data-testid="stHeader"] { background: var(--bg) !important; }
 /* 黃色底上的文字一律墨色，不用白字 */
 button[kind^="primary"], button[kind^="primary"] p { color: var(--text) !important; }
 button[kind^="primary"] { background: var(--primary) !important; border: 1.5px solid var(--ink) !important; }
@@ -446,8 +448,12 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
    外層 stLayoutWrapper（主欄的直接子元素）設 sticky、高度 0，摘要列疊在內容上面，出現／消失都不會推動版面 */
 [data-testid="stLayoutWrapper"]:has(> .st-key-summary_bar) { position: sticky; top: 3.75rem; z-index: 990;
                                                              height: 0; overflow: visible; }
-.st-key-summary_bar { background: var(--bg); padding: 8px 0; border-bottom: 1.5px solid var(--ink);
-                      box-shadow: 0 4px 8px rgba(36, 34, 35, 0.12);
+/* 浮起來的圓角小卡：和頂端、下面內容都留距離，加陰影表示內容從它底下經過（不是一條線切過內容） */
+.st-key-summary_bar::before { content: ""; position: absolute; left: -24px; right: -24px; top: -11px; height: 10px;
+                              background: var(--bg); }  /* 補滿和頂端工具列之間的縫，捲過去的內容不會從縫裡露出來 */
+.st-key-summary_bar { position: relative; background: var(--card); padding: 12px 18px; margin-top: 8px;
+                      border: 1.5px solid var(--ink); border-radius: 16px;
+                      box-shadow: 0 8px 24px rgba(36, 34, 35, 0.16), 0 2px 4px rgba(36, 34, 35, 0.08);
                       opacity: 0; visibility: hidden; transform: translateY(-8px);
                       transition: opacity .2s, transform .2s, visibility 0s .2s; }
 body[data-filters-hidden] .st-key-summary_bar { opacity: 1; visibility: visible; transform: none;
