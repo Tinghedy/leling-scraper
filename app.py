@@ -257,6 +257,7 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
 .result-line .sep { color: var(--muted); }
 /* 手機上的地圖：預設收起，圓形按鈕打開成全螢幕；桌機維持列表在左、地圖在右，按鈕隱藏 */
 .st-key-map_fab { display: none; }
+@media (min-width: 641px) { .st-key-back_list { display: none !important; } }
 @media (max-width: 640px) {
   .st-key-map_closed { display: none !important; }
   .st-key-map_open { position: fixed !important; inset: 0; z-index: 1000000; background: var(--bg);
@@ -600,6 +601,12 @@ def sessions_text(c: dict) -> str:
     return f"共 {len(ds)} 堂（{short(ds[0])}）" if len(ds) == 1 else f"共 {len(ds)} 堂（{short(ds[0])}～{short(ds[-1])}）"
 
 
+def back_button(key: str) -> None:
+    """點了地圖上的某一區之後，回到原本範圍的按鈕"""
+    st.button(f"回到我住的區和鄰近區（{home}）" if home else "回到全台南的課", type="primary", key=key,
+              use_container_width=True, on_click=apply, kwargs={"picked": None, "f_all": False})
+
+
 def card(c: dict) -> str:
     """卡片：左上狀態徽章 → 主題 · 來源 → 課名 → 時間、堂數、地點（各有圖示）→ 警示 → 看原文按鈕"""
     kind, text = badge(c)
@@ -677,9 +684,8 @@ with col_list:
     n_no_time = sum(1 for c in shown if no_time(c))
     if n_no_time and not shown_unsure:
         st.caption(f"其中 {n_no_time} 門沒寫上課日期或時間，排在最後面。")
-    if picked:
-        st.button(f"回到我住的區和鄰近區（{home}）" if home else "回到全台南的課", type="primary",
-                  use_container_width=True, on_click=apply, kwargs={"picked": None, "f_all": False})
+    if picked:  # 手機上地圖預設收起，列表這裡也放一顆（桌機隱藏，只用地圖上方那顆）
+        back_button("back_list")
 
     # 查無結果：列出「只放寬一個條件」各有幾門，點了直接套用（沒有小標題，狀態標籤自己一行靠右）
     if not shown:
@@ -738,6 +744,8 @@ with col_list:
 # ── 地圖：行政區分層設色，預設放大到住的區和鄰近區 ──
 # 手機（< 640px）：地圖預設收起，右下角圓形「地圖」按鈕打開成全螢幕、再點收起；桌機一律顯示（見 CSS）
 with col_map, st.container(key="map_open" if st.session_state.map_open else "map_closed"):
+    if picked:  # 回到原本範圍的按鈕放在地圖正上方
+        back_button("back_map")
     # 預設放大到住的區和鄰近區（加上點選的區）；開「看全台南的課」時看全圖
     focus = None if area is None else mine | (area or set())
     result = district_map(data=map_svg(home, near, counts, picked, focus), key="district_map",
