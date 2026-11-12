@@ -1,5 +1,6 @@
 # 台南樂齡中心課程貼文抓取
 
+上課用DEMO LINK底加：https://elderlyclass-scraper.streamlit.app/
 每天從 `centers.csv` 挑 10 間樂齡中心，抓它們 Facebook 上的貼文，去識別化之後整理成表格。
 最久沒抓的會優先抓，36 間大約 4 天輪完一次。之後再跑，就只會抓上次之後的新貼文。
 
