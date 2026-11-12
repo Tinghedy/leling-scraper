@@ -271,12 +271,17 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
   .st-key-map_fab button > div, .st-key-map_fab button > div > span { flex-direction: column !important; gap: 0 !important;
                                                                       display: flex; align-items: center; }
 }
-/* 我住在＋篩選條件釘在上方（sticky）：要掛在外層的 stLayoutWrapper（它才是主欄的直接子元素）；
-   米白底蓋住捲過去的內容，下緣一條墨線分隔。手機上篩選區幾乎一整個螢幕高，釘住會把列表擋掉，所以只在桌機釘 */
-@media (min-width: 641px) {
-  [data-testid="stLayoutWrapper"]:has(> .st-key-filters) { position: sticky; top: 3.75rem; z-index: 990; }
-  .st-key-filters { background: var(--bg); padding: 8px 0 12px; border-bottom: 1.5px solid var(--ink); }
-}
+/* 釘在上方的是一行摘要列（目前條件＋門數＋「修改條件」），不是整塊篩選區，才不會擋掉課程。
+   sticky 要掛在外層的 stLayoutWrapper（它才是主欄的直接子元素）；桌機手機都釘 */
+[data-testid="stLayoutWrapper"]:has(> .st-key-summary_bar) { position: sticky; top: 3.75rem; z-index: 990; }
+.st-key-summary_bar { background: var(--bg); padding: 8px 0; border-top: 1.5px solid var(--ink);
+                      border-bottom: 1.5px solid var(--ink); }
+.summary { margin: 0; font-size: 20px !important; }
+.summary .ms { vertical-align: -5px; margin-right: 4px; }
+.summary b { font-size: 22px; }
+.st-key-summary_bar [data-testid="stPopover"] button { min-height: var(--tap); border-radius: 999px !important;
+  background: var(--primary) !important; border: 1.5px solid var(--ink) !important; padding: 0 18px !important; }
+.st-key-summary_bar [data-testid="stPopover"] button p { font-weight: 700 !important; color: var(--text) !important; }
 .st-key-filters .stButtonGroup label, .st-key-filters [data-testid="stWidgetLabel"] { margin-bottom: 0; }
 .stButtonGroup [role="toolbar"] { flex-wrap: wrap !important; gap: var(--gap) !important; }
 a { color: var(--text) !important; text-decoration: underline; }
@@ -451,9 +456,10 @@ for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", None)
 
 
 
-def sync_domain() -> None:
-    """主題標籤的「全部」只是呈現：選「全部」＝清掉其他主題；選了其他主題就取消「全部」。篩選仍看 f_domain。"""
-    sel = list(st.session_state.w_domain or [])
+def sync_domain(src: str = "w_domain") -> None:
+    """主題標籤的「全部」只是呈現：選「全部」＝清掉其他主題；選了其他主題就取消「全部」。篩選仍看 f_domain。
+    src：哪一組標籤被改了（頁面上的 w_domain，或「修改條件」裡的 pop_domain）"""
+    sel = list(st.session_state[src] or [])
     prev = st.session_state.get("w_domain_prev", [ALL])
     if ALL in sel and ALL not in prev:
         sel = [ALL]
@@ -481,7 +487,7 @@ def set_home() -> None:
 
 # 我住在：還沒選＝淡黃提示橫幅＋選區；選了＝一顆選中狀態的標籤「我住在：東區」，點了可以改
 # （選單用另一個 key，避免選單沒畫出來時 Streamlit 把 home 清掉）
-# 我住在＋篩選條件釘在畫面上方：往下捲看課程時也能隨時改條件（樣式見 .st-key-filters）
+# 我住在＋篩選條件（不釘住；釘住的是下面的摘要列）
 with st.container(key="filters"):
     if st.session_state.home is None or st.session_state.home_edit:
         with st.container(key="home_banner"):
@@ -501,7 +507,7 @@ with st.container(key="filters"):
     # 膠囊標籤可複選；手機上自動換行（不做左右滑動）
     st.pills("星期", WEEKDAYS, selection_mode="multi", key="f_weekday", format_func=lambda w: "週" + w)
     st.pills("時段", list(SLOTS), selection_mode="multi", key="f_slot", format_func=SLOTS.get)
-    st.pills("主題", [ALL, *DOMAINS], selection_mode="multi", key="w_domain", on_change=sync_domain,
+    st.pills("主題", [ALL, *DOMAINS], selection_mode="multi", key="w_domain", on_change=sync_domain, args=("w_domain",),
              format_func=lambda d: f":material/{DOMAIN_ICONS[d]}: {d}")
 
 st.toggle("顯示已結束的課", key="f_show_ended")
@@ -618,6 +624,42 @@ def card(c: dict) -> str:
 
 
 where = f"只看{picked}" if picked else "全台南" if area is None else f"{home}和鄰近區"
+
+
+
+def from_popover(kind: str) -> None:
+    """「修改條件」面板裡的標籤用另一組 key（同一個 widget key 不能畫兩次），改了就寫回真正的篩選條件"""
+    if kind == "domain":
+        sync_domain("pop_domain")
+    else:
+        st.session_state[f"f_{kind}"] = list(st.session_state[f"pop_{kind}"] or [])
+
+
+def summary_html() -> str:
+    # 只列出有選的條件，摘要列才短（手機上盡量一行）；什麼都沒選就只寫區和門數
+    chosen = ["、".join("週" + w for w in st.session_state.f_weekday),
+              "、".join(SLOTS[x] for x in st.session_state.f_slot),
+              "、".join(st.session_state.f_domain),
+              "、".join(STATUS_PILLS[x] for x in st.session_state.f_status)]
+    parts = [home or "全台南"] + [x for x in chosen if x]
+    return (f'<p class="summary">{icon("location_on")}{html.escape(" · ".join(parts))}'
+            f' · 符合 <b>{len(shown)}</b> 門</p>')
+
+
+# 釘在上方的摘要列：往下捲時看得到目前條件，按「修改條件」直接改，不用捲回頂端
+with st.container(key="summary_bar", horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
+    st.markdown(summary_html(), unsafe_allow_html=True, width="content")
+    # 面板裡的標籤每次重跑前先對齊目前的條件（頁面上的標籤改了，這裡也要跟著）
+    st.session_state.pop_weekday = list(st.session_state.f_weekday)
+    st.session_state.pop_slot = list(st.session_state.f_slot)
+    st.session_state.pop_domain = list(st.session_state.w_domain)
+    with st.popover("修改條件", icon=":material/tune:"):
+        st.pills("星期", WEEKDAYS, selection_mode="multi", key="pop_weekday", format_func=lambda w: "週" + w,
+                 on_change=from_popover, args=("weekday",))
+        st.pills("時段", list(SLOTS), selection_mode="multi", key="pop_slot", format_func=SLOTS.get,
+                 on_change=from_popover, args=("slot",))
+        st.pills("主題", [ALL, *DOMAINS], selection_mode="multi", key="pop_domain",
+                 format_func=lambda d: f":material/{DOMAIN_ICONS[d]}: {d}", on_change=from_popover, args=("domain",))
 
 # 桌機：列表在左、地圖在右；手機（< 640px）columns 直向排列，列表就在篩選條件下方、地圖上方
 col_list, col_map = st.columns([11, 9], gap="large")
