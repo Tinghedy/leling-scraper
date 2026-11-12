@@ -2461,6 +2461,274 @@
   "post_date": "2026-10-06"
  },
  {
+  "center": "中西區樂齡學習中心",
+  "district": "中西區",
+  "lat": 22.997024,
+  "lng": 120.196191,
+  "course_name": "樂活桌球社團",
+  "weekday": [
+   "三"
+  ],
+  "start_time": "15:00",
+  "end_time": "16:30",
+  "time_slot": "afternoon",
+  "start_date": "2026-11-04",
+  "end_date": "2026-11-25",
+  "dates": [
+   "2026-11-04",
+   "2026-11-11",
+   "2026-11-18",
+   "2026-11-25"
+  ],
+  "venue": "進學據點",
+  "domain": null,
+  "instructor": null,
+  "inferred_fields": [
+   "end_date",
+   "start_date"
+  ],
+  "source_url": "https://moe.senioredu.moe.gov.tw/HomeSon/Tainan/TainanCenterMoreNews?seniorCenterMessageFileViewModel.enFormId=pcissvF3VLfO_bAIlrBI0Sg_c_c",
+  "source_type": "moe_doc",
+  "post_date": "2026-11-03"
+ },
+ {
+  "center": "中西區樂齡學習中心",
+  "district": "中西區",
+  "lat": 22.997024,
+  "lng": 120.196191,
+  "course_name": "樂齡活力節奏樂",
+  "weekday": [
+   "三"
+  ],
+  "start_time": "09:30",
+  "end_time": "11:00",
+  "time_slot": "morning",
+  "start_date": "2026-11-04",
+  "end_date": "2026-11-18",
+  "dates": [
+   "2026-11-04",
+   "2026-11-11",
+   "2026-11-18"
+  ],
+  "venue": "小西門據點",
+  "domain": null,
+  "instructor": null,
+  "inferred_fields": [],
+  "source_url": "https://moe.senioredu.moe.gov.tw/HomeSon/Tainan/TainanCenterMoreNews?seniorCenterMessageFileViewModel.enFormId=pcissvF3VLfO_bAIlrBI0Sg_c_c",
+  "source_type": "moe_doc",
+  "post_date": "2026-11-03"
+ },
+ {
+  "center": "中西區樂齡學習中心",
+  "district": "中西區",
+  "lat": 22.997024,
+  "lng": 120.196191,
+  "course_name": "健康體適能",
+  "weekday": [
+   "五"
+  ],
+  "start_time": "14:00",
+  "end_time": "16:00",
+  "time_slot": "afternoon",
+  "start_date": "2026-11-06",
+  "end_date": "2026-11-20",
+  "dates": [
+   "2026-11-06",
+   "2026-11-20"
+  ],
+  "venue": "中心本部",
+  "domain": "健康運動",
+  "instructor": null,
+  "inferred_fields": [],
+  "source_url": "https://moe.senioredu.moe.gov.tw/HomeSon/Tainan/TainanCenterMoreNews?seniorCenterMessageFileViewModel.enFormId=pcissvF3VLfO_bAIlrBI0Sg_c_c",
+  "source_type": "moe_doc",
+  "post_date": "2026-11-03"
+ },
+ {
+  "center": "中西區樂齡學習中心",
+  "district": "中西區",
+  "lat": 22.997024,
+  "lng": 120.196191,
+  "course_name": "樂齡非洲鼓團",
+  "weekday": [
+   "五"
+  ],
+  "start_time": "10:30",
+  "end_time": "11:00",
+  "time_slot": "morning",
+  "start_date": "2026-11-06",
+  "end_date": "2026-11-27",
+  "dates": [
+   "2026-11-06",
+   "2026-11-13",
+   "2026-11-20",
+   "2026-11-27"
+  ],
+  "venue": "西賢據點",
+  "domain": null,
+  "instructor": null,
+  "inferred_fields": [
+   "end_date",
+   "start_date"
+  ],
+  "source_url": "https://moe.senioredu.moe.gov.tw/HomeSon/Tainan/TainanCenterMoreNews?seniorCenterMessageFileViewModel.enFormId=pcissvF3VLfO_bAIlrBI0Sg_c_c",
+  "source_type": "moe_doc",
+  "post_date": "2026-11-03"
+ },
+ {
+  "center": "中西區樂齡學習中心",
+  "district": "中西區",
+  "lat": 22.997024,
+  "lng": 120.196191,
+  "course_name": "高齡自主生活",
+  "weekday": [
+   "六"
+  ],
+  "start_time": "09:30",
+  "end_time": "11:30",
+  "time_slot": "morning",
+  "start_date": "2026-11-07",
+  "end_date": "2026-11-07",
+  "dates": [
+   "2026-11-07"
+  ],
+  "venue": "西門據點",
+  "domain": null,
+  "instructor": null,
+  "inferred_fields": [],
+  "source_url": "https://moe.senioredu.moe.gov.tw/HomeSon/Tainan/TainanCenterMoreNews?seniorCenterMessageFileViewModel.enFormId=pcissvF3VLfO_bAIlrBI0Sg_c_c",
+  "source_type": "moe_doc",
+  "post_date": "2026-11-03"
+ },
+ {
+  "center": "中西區樂齡學習中心",
+  "district": "中西區",
+  "lat": 22.997024,
+  "lng": 120.196191,
+  "course_name": "生活安全報您知",
+  "weekday": [
+   "三",
+   "日"
+  ],
+  "start_time": "10:00",
+  "end_time": "12:00",
+  "time_slot": "morning",
+  "start_date": "2026-11-11",
+  "end_date": "2026-11-18",
+  "dates": [
+   "2026-11-11",
+   "2026-11-15",
+   "2026-11-18"
+  ],
+  "venue": "西湖據點",
+  "domain": "生活財務",
+  "instructor": null,
+  "inferred_fields": [],
+  "source_url": "https://moe.senioredu.moe.gov.tw/HomeSon/Tainan/TainanCenterMoreNews?seniorCenterMessageFileViewModel.enFormId=pcissvF3VLfO_bAIlrBI0Sg_c_c",
+  "source_type": "moe_doc",
+  "post_date": "2026-11-03"
+ },
+ {
+  "center": "中西區樂齡學習中心",
+  "district": "中西區",
+  "lat": 22.997024,
+  "lng": 120.196191,
+  "course_name": "樂齡園藝輔療",
+  "weekday": [
+   "五"
+  ],
+  "start_time": "09:30",
+  "end_time": "10:30",
+  "time_slot": "morning",
+  "start_date": "2026-11-13",
+  "end_date": "2026-11-13",
+  "dates": [
+   "2026-11-13"
+  ],
+  "venue": "中心本部",
+  "domain": null,
+  "instructor": null,
+  "inferred_fields": [],
+  "source_url": "https://moe.senioredu.moe.gov.tw/HomeSon/Tainan/TainanCenterMoreNews?seniorCenterMessageFileViewModel.enFormId=pcissvF3VLfO_bAIlrBI0Sg_c_c",
+  "source_type": "moe_doc",
+  "post_date": "2026-11-03"
+ },
+ {
+  "center": "中西區樂齡學習中心",
+  "district": "中西區",
+  "lat": 22.997024,
+  "lng": 120.196191,
+  "course_name": "活化記憶力",
+  "weekday": [
+   "四"
+  ],
+  "start_time": "10:00",
+  "end_time": "12:00",
+  "time_slot": "morning",
+  "start_date": "2026-11-19",
+  "end_date": "2026-11-19",
+  "dates": [
+   "2026-11-19"
+  ],
+  "venue": "赤崁據點",
+  "domain": null,
+  "instructor": null,
+  "inferred_fields": [],
+  "source_url": "https://moe.senioredu.moe.gov.tw/HomeSon/Tainan/TainanCenterMoreNews?seniorCenterMessageFileViewModel.enFormId=pcissvF3VLfO_bAIlrBI0Sg_c_c",
+  "source_type": "moe_doc",
+  "post_date": "2026-11-03"
+ },
+ {
+  "center": "中西區樂齡學習中心",
+  "district": "中西區",
+  "lat": 22.997024,
+  "lng": 120.196191,
+  "course_name": "樂齡色彩之旅",
+  "weekday": [
+   "四"
+  ],
+  "start_time": "14:30",
+  "end_time": "16:00",
+  "time_slot": "afternoon",
+  "start_date": "2026-11-26",
+  "end_date": "2026-11-26",
+  "dates": [
+   "2026-11-26"
+  ],
+  "venue": "中心本部",
+  "domain": null,
+  "instructor": null,
+  "inferred_fields": [],
+  "source_url": "https://moe.senioredu.moe.gov.tw/HomeSon/Tainan/TainanCenterMoreNews?seniorCenterMessageFileViewModel.enFormId=pcissvF3VLfO_bAIlrBI0Sg_c_c",
+  "source_type": "moe_doc",
+  "post_date": "2026-11-03"
+ },
+ {
+  "center": "中西區樂齡學習中心",
+  "district": "中西區",
+  "lat": 22.997024,
+  "lng": 120.196191,
+  "course_name": "指尖的祝福:節慶粉彩手作",
+  "weekday": [
+   "五"
+  ],
+  "start_time": "14:00",
+  "end_time": "16:00",
+  "time_slot": "afternoon",
+  "start_date": "2026-11-27",
+  "end_date": "2026-11-27",
+  "dates": [
+   "2026-11-27"
+  ],
+  "venue": "中心本部",
+  "domain": "藝術手作",
+  "instructor": null,
+  "inferred_fields": [],
+  "source_url": "https://moe.senioredu.moe.gov.tw/HomeSon/Tainan/TainanCenterMoreNews?seniorCenterMessageFileViewModel.enFormId=pcissvF3VLfO_bAIlrBI0Sg_c_c",
+  "source_type": "moe_doc",
+  "post_date": "2026-11-03"
+ },
+ {
   "center": "仁德區樂齡學習中心",
   "district": "仁德區",
   "lat": 22.945232,
