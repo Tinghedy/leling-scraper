@@ -274,22 +274,16 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
 .result-line { font-size: 22px !important; margin: 0; }
 .result-line b { font-size: 26px; }
 .result-line .sep { color: var(--muted); }
-/* 手機上的地圖：預設收起，圓形按鈕打開成全螢幕；桌機維持列表在左、地圖在右，按鈕隱藏 */
-.st-key-map_fab { display: none; }
-@media (min-width: 641px) { .st-key-back_list { display: none !important; } }
+/* 手機（≤ 640px）：地圖放在標題下方、「我住在」和篩選選項上面；桌機維持列表在左、地圖在右。
+   同一個地圖元件只能畫一次，所以不在 Python 裡換位置，而是用 CSS：把包住地圖的 columns 外層都設成
+   display: contents，地圖那一層就變成主欄的直接子元素，再用 order 排到最前面（標題用 order -2 留在最上面） */
 @media (max-width: 640px) {
-  .st-key-map_closed { display: none !important; }
-  .st-key-map_open { position: fixed !important; inset: 0; z-index: 1000000; background: var(--bg);
-                     overflow-y: auto; padding: 72px 16px 128px; }
-  .st-key-map_fab { display: block; position: fixed !important; right: 16px; bottom: 16px; z-index: 1000001;
-                    width: auto !important; }
-  .st-key-map_fab button { width: 84px; height: 84px; border-radius: 50% !important; background: var(--primary) !important;
-                           border: 1.5px solid var(--ink) !important; flex-direction: column; gap: 0;
-                           box-shadow: 0 2px 8px rgba(36, 34, 35, 0.35); }
-  .st-key-map_fab button p, .st-key-map_fab button span { color: var(--text) !important; font-weight: 700 !important;
-                                                           white-space: nowrap; margin: 0 !important; }
-  .st-key-map_fab button > div, .st-key-map_fab button > div > span { flex-direction: column !important; gap: 0 !important;
-                                                                      display: flex; align-items: center; }
+  [data-testid="stLayoutWrapper"]:has(> [data-testid="stHorizontalBlock"] .st-key-map_box),
+  [data-testid="stHorizontalBlock"]:has(.st-key-map_box),
+  [data-testid="stColumn"]:has(.st-key-map_box),
+  [data-testid="stColumn"]:has(.st-key-map_box) > [data-testid="stVerticalBlock"] { display: contents !important; }
+  [data-testid="stLayoutWrapper"]:has(> .st-key-map_box) { order: -1; }
+  [data-testid="stElementContainer"]:has(h1) { order: -2; }
 }
 /* 摘要列（目前條件＋門數＋「修改條件」）：平常藏起來，完整篩選區捲出畫面後才出現、釘在上方。
    外層 stLayoutWrapper（主欄的直接子元素）設 sticky、高度 0，摘要列疊在內容上面，出現／消失都不會推動版面 */
@@ -477,7 +471,7 @@ def when(c: dict) -> str:
     return f"{days} {t}"
 
 
-for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", None), ("home_edit", False), ("f_show_ended", False), ("f_status", []), ("f_all", False), ("picked", None), ("map_open", False)):
+for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", None), ("home_edit", False), ("f_show_ended", False), ("f_status", []), ("f_all", False), ("picked", None)):
     st.session_state.setdefault(k, v)
 
 
@@ -710,8 +704,6 @@ with col_list:
     n_no_time = sum(1 for c in shown if no_time(c))
     if n_no_time and not shown_unsure:
         st.caption(f"其中 {n_no_time} 門沒寫上課日期或時間，排在最後面。")
-    if picked:  # 手機上地圖預設收起，列表這裡也放一顆（桌機隱藏，只用地圖上方那顆）
-        back_button("back_list")
 
     # 查無結果：列出「只放寬一個條件」各有幾門，點了直接套用（沒有小標題，狀態標籤自己一行靠右）
     if not shown:
@@ -768,8 +760,8 @@ with col_list:
                     st.markdown("".join(card(c) for c in items), unsafe_allow_html=True)
 
 # ── 地圖：行政區分層設色，預設放大到住的區和鄰近區 ──
-# 手機（< 640px）：地圖預設收起，右下角圓形「地圖」按鈕打開成全螢幕、再點收起；桌機一律顯示（見 CSS）
-with col_map, st.container(key="map_open" if st.session_state.map_open else "map_closed"):
+# 手機（≤ 640px）：地圖移到篩選選項上面（見 CSS 的 .st-key-map_box）
+with col_map, st.container(key="map_box"):
     if picked:  # 回到原本範圍的按鈕放在地圖正上方
         back_button("back_map")
     # 預設放大到住的區和鄰近區（加上點選的區）；開「看全台南的課」時看全圖
@@ -796,7 +788,3 @@ with st.expander("關於這份資料"):
     st.caption("⚠ 表示原文沒寫日期或時間，或這個欄位是推論的（AI 讀圖或照月份展開日期），請點「原文」確認。"
                if SHOW_INFERRED else "⚠ 表示原文沒寫上課日期或時間，請打電話向中心確認，或點「原文」看貼文。")
 
-# 手機用的圓形地圖按鈕（桌機隱藏）
-st.button("收起" if st.session_state.map_open else "地圖", key="map_fab",
-          icon=":material/close:" if st.session_state.map_open else ":material/map:",
-          on_click=lambda: st.session_state.update(map_open=not st.session_state.map_open))
