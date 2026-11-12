@@ -104,6 +104,25 @@ export default function(component) {
 }
 """
 district_map = st.components.v2.component("tainan_district_map", css=MAP_CSS, js=MAP_JS)
+
+# 捲動偵測：完整篩選區（.st-key-filters）捲出畫面後，在 <body> 加 data-filters-hidden，CSS 才把摘要列顯示出來；
+# 捲回去看得到篩選區時拿掉。Streamlit 本身抓不到捲動位置，所以用一個看不見的元件跑這段 JS。
+WATCH_JS = """
+export default function() {
+    const update = () => {
+        const f = document.querySelector(".st-key-filters");
+        const hidden = !!f && f.getBoundingClientRect().bottom < 90;  // 90px ≈ 上方工具列＋一點緩衝
+        document.body.toggleAttribute("data-filters-hidden", hidden);
+    };
+    if (!window.__lelingScrollWatch) {  // 每次重跑都會呼叫，監聽只掛一次
+        window.__lelingScrollWatch = true;
+        document.addEventListener("scroll", update, { capture: true, passive: true });  // 捕捉任何捲動容器
+        window.addEventListener("resize", update);
+    }
+    requestAnimationFrame(update);  // 重跑後版面可能變了，重新判斷一次
+}
+"""
+scroll_watch = st.components.v2.component("filters_scroll_watch", js=WATCH_JS)
 SHOW_INFERRED = False  # 清單裡要不要標「⚠ 推論（原文沒明寫）」；暫時隱藏
 STATUS_ZH = {"upcoming": "即將開課", "ongoing": "進行中", "ended": "已結束", "unknown": "日期沒寫"}
 # 結果列旁的狀態標籤（可複選；都不選＝不限）
@@ -272,11 +291,17 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
   .st-key-map_fab button > div, .st-key-map_fab button > div > span { flex-direction: column !important; gap: 0 !important;
                                                                       display: flex; align-items: center; }
 }
-/* 釘在上方的是一行摘要列（目前條件＋門數＋「修改條件」），不是整塊篩選區，才不會擋掉課程。
-   sticky 要掛在外層的 stLayoutWrapper（它才是主欄的直接子元素）；桌機手機都釘 */
-[data-testid="stLayoutWrapper"]:has(> .st-key-summary_bar) { position: sticky; top: 3.75rem; z-index: 990; }
-.st-key-summary_bar { background: var(--bg); padding: 8px 0; border-top: 1.5px solid var(--ink);
-                      border-bottom: 1.5px solid var(--ink); }
+/* 摘要列（目前條件＋門數＋「修改條件」）：平常藏起來，完整篩選區捲出畫面後才出現、釘在上方。
+   外層 stLayoutWrapper（主欄的直接子元素）設 sticky、高度 0，摘要列疊在內容上面，出現／消失都不會推動版面 */
+[data-testid="stLayoutWrapper"]:has(> .st-key-summary_bar) { position: sticky; top: 3.75rem; z-index: 990;
+                                                             height: 0; overflow: visible; }
+.st-key-summary_bar { background: var(--bg); padding: 8px 0; border-bottom: 1.5px solid var(--ink);
+                      box-shadow: 0 4px 8px rgba(36, 34, 35, 0.12);
+                      opacity: 0; visibility: hidden; transform: translateY(-8px);
+                      transition: opacity .2s, transform .2s, visibility 0s .2s; }
+body[data-filters-hidden] .st-key-summary_bar { opacity: 1; visibility: visible; transform: none;
+                                                transition: opacity .2s, transform .2s; }
+.st-key-scroll_watch { display: none !important; }
 .summary { margin: 0; font-size: 20px !important; }
 .summary .ms { vertical-align: -5px; margin-right: 4px; }
 .summary b { font-size: 22px; }
@@ -653,7 +678,8 @@ def summary_html() -> str:
             f' · 符合 <b>{len(shown)}</b> 門</p>')
 
 
-# 釘在上方的摘要列：往下捲時看得到目前條件，按「修改條件」直接改，不用捲回頂端
+# 釘在上方的摘要列：完整篩選區捲出畫面後才出現（見 WATCH_JS），按「修改條件」直接改，不用捲回頂端
+scroll_watch(key="scroll_watch")
 with st.container(key="summary_bar", horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
     st.markdown(summary_html(), unsafe_allow_html=True, width="content")
     # 面板裡的標籤每次重跑前先對齊目前的條件（頁面上的標籤改了，這裡也要跟著）
