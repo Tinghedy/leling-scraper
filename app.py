@@ -253,7 +253,6 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
 .st-key-home_chip button p { font-weight: 700 !important; color: var(--text) !important; }
 .st-key-home_chip button p::before { content: "✓ "; }
 .result-line { font-size: 22px !important; margin: 0; }
-.st-key-status_row { margin-top: 8px; }
 .result-line b { font-size: 26px; }
 .result-line .sep { color: var(--muted); }
 /* 手機上的地圖：預設收起，圓形按鈕打開成全螢幕；桌機維持列表在左、地圖在右，按鈕隱藏 */
@@ -625,15 +624,14 @@ col_list, col_map = st.columns([11, 9], gap="large")
 
 # ── 課程列表 ──
 with col_list:
-    # 結果列：「符合 N 門 · 資料更新於 YYYY/MM/DD」＋狀態標籤，放在列表欄裡，
-    # 狀態標籤放在下一行、靠右（Streamlit 內建的水平 container），右緣和課程卡片對齊
-    with st.container(key="result_row"):
-        st.markdown(f'<p class="result-line">符合 <b>{len(shown)}</b> 門（{html.escape(where)}）'
-                    f'<span class="sep"> · </span>資料更新於 {data_updated(COURSES.stat().st_mtime).replace("-", "/")}</p>',
-                    unsafe_allow_html=True)
-        with st.container(horizontal=True, horizontal_alignment="right", key="status_row"):
-            st.pills("狀態", list(STATUS_PILLS), selection_mode="multi", key="f_status", format_func=STATUS_PILLS.get,
-                     label_visibility="collapsed")
+    def status_pills() -> None:
+        st.pills("狀態", list(STATUS_PILLS), selection_mode="multi", key="f_status", format_func=STATUS_PILLS.get,
+                 label_visibility="collapsed")
+
+    # 結果列：「符合 N 門 · 資料更新於 YYYY/MM/DD」；狀態標籤放在第一個分區小標題的同一行、靠右（右緣和卡片對齊）
+    st.markdown(f'<p class="result-line">符合 <b>{len(shown)}</b> 門（{html.escape(where)}）'
+                f'<span class="sep"> · </span>資料更新於 {data_updated(COURSES.stat().st_mtime).replace("-", "/")}</p>',
+                unsafe_allow_html=True)
     n_no_time = sum(1 for c in shown if no_time(c))
     if n_no_time and not shown_unsure:
         st.caption(f"其中 {n_no_time} 門沒寫上課日期或時間，排在最後面。")
@@ -641,8 +639,10 @@ with col_list:
         st.button(f"回到我住的區和鄰近區（{home}）" if home else "回到全台南的課", type="primary",
                   use_container_width=True, on_click=apply, kwargs={"picked": None, "f_all": False})
 
-    # 查無結果：列出「只放寬一個條件」各有幾門，點了直接套用
+    # 查無結果：列出「只放寬一個條件」各有幾門，點了直接套用（沒有小標題，狀態標籤自己一行靠右）
     if not shown:
+        with st.container(horizontal=True, horizontal_alignment="right"):
+            status_pills()
         def count(area_: set[str] | None, **change) -> int:
             return sum(1 for c in filtered({**params, **change}) if area_ is None or c["district"] in area_)
 
@@ -671,8 +671,13 @@ with col_list:
         if st.session_state.get("list_sig") != sig:
             st.session_state.list_sig, st.session_state.n_show = sig, PAGE
         budget = st.session_state.n_show
-        for title, items in sections:
-            st.markdown(f"#### {title} {len(items)} 門")
+        for i, (title, items) in enumerate(sections):
+            if i == 0:  # 第一個小標題靠左、狀態標籤靠右，同一行（放不下時標籤換到下一行）
+                with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
+                    st.markdown(f"#### {title} {len(items)} 門", width="content")
+                    status_pills()
+            else:
+                st.markdown(f"#### {title} {len(items)} 門")
             st.markdown("".join(card(c) for c in items[:max(budget, 0)]), unsafe_allow_html=True)
             budget -= len(items)
         if budget < 0:
