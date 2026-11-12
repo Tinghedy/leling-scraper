@@ -363,6 +363,14 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
 body[data-filters-hidden] .st-key-summary_bar { opacity: 1; visibility: visible; transform: none;
                                                 transition: opacity .2s, transform .2s; }
 .st-key-scroll_watch { display: none !important; }
+/* 篩選收起來的那一行：淡黃底框，右邊「修改條件」 */
+.st-key-filters_closed { background: var(--soft); border: 1.5px solid var(--ink); border-radius: 16px; padding: 8px 8px 8px 16px; }
+.st-key-filters_closed button, .st-key-filters_done button { border-radius: 999px !important; padding: 0 20px !important;
+  border: 1.5px solid var(--ink) !important; }
+.st-key-filters_closed button { background: var(--card) !important; }
+.st-key-filters_closed [data-testid="stMarkdownContainer"], .st-key-filters_closed [data-testid="stMarkdownContainer"] p { margin: 0 !important; }
+.st-key-filters_closed [data-testid="stElementContainer"] { margin: 0 !important; align-self: center; }
+.st-key-filters_closed button p, .st-key-filters_done button p { font-weight: 700 !important; color: var(--text) !important; }
 .summary { margin: 0; font-size: 20px !important; }
 .summary .ms { vertical-align: -5px; margin-right: 4px; }
 .summary b { font-size: 22px; }
@@ -563,6 +571,20 @@ def sync_domain(src: str = "w_domain") -> None:
 
 
 st.session_state.setdefault("w_domain", st.session_state.f_domain or [ALL])
+st.session_state.setdefault("filters_open", True)
+# 篩選收起來時，星期、時段、主題標籤不會畫出來；Streamlit 會把沒畫出來的 widget 的值清掉，
+# 所以每次重跑一開始先把值寫回去（變成一般的 session_state 值），收起來也會保留
+for _k in ("f_weekday", "f_slot", "w_domain", "f_show_ended", "f_all"):
+    st.session_state[_k] = st.session_state[_k]
+
+
+def chosen_text() -> str:
+    """收起來時顯示的條件：只列有選的；都沒選就寫「不限」"""
+    sep = t("、", ", ")
+    parts = [sep.join(map(wd_label, st.session_state.f_weekday)),
+             sep.join(map(slot_label, st.session_state.f_slot)),
+             sep.join(map(dom_label, st.session_state.f_domain))]
+    return " · ".join(p for p in parts if p) or t("不限星期、時段、主題", "Any day, time and topic")
 def set_lang() -> None:
     """語言切換；不讓它被取消選取（再點一次目前的語言時維持原樣），並寫進網址方便分享"""
     if st.session_state.w_lang is None:
@@ -613,18 +635,29 @@ with st.container(key="filters"):
                   on_click=lambda: st.session_state.update(home_edit=True))
     home = st.session_state.home
 
-    st.markdown(t("**篩選條件**", "**Filters**"))
-    # 選項一變就重跑：地圖數字和列表都用同一份 hits
-    # 手機寬度（< 640px）Streamlit 會把 columns 改成直向排列
-    # 膠囊標籤可複選；手機上自動換行（不做左右滑動）
-    st.pills(t("星期", "Day"), WEEKDAYS, selection_mode="multi", key="f_weekday", format_func=wd_label)
-    st.pills(t("時段", "Time of day"), list(SLOTS), selection_mode="multi", key="f_slot", format_func=slot_label)
-    st.pills(t("主題", "Topic"), [ALL, *DOMAINS], selection_mode="multi", key="w_domain", on_change=sync_domain,
-             args=("w_domain",), format_func=lambda d: f":material/{DOMAIN_ICONS[d]}: {dom_label(d)}")
-
-st.toggle(t("顯示已結束的課", "Show ended classes"), key="f_show_ended")
-if st.session_state.home:
-    st.toggle(t("看全台南的課", "Show all of Tainan"), key="f_all")
+    # 篩選條件可以收起來：選好按「完成」→ 收成一行（目前條件＋「修改條件」），點了再展開
+    if st.session_state.filters_open:
+        st.markdown(t("**篩選條件**", "**Filters**"))
+        # 選項一變就重跑：地圖數字和列表都用同一份 hits
+        # 膠囊標籤可複選；手機上自動換行（不做左右滑動）
+        st.pills(t("星期", "Day"), WEEKDAYS, selection_mode="multi", key="f_weekday", format_func=wd_label)
+        st.pills(t("時段", "Time of day"), list(SLOTS), selection_mode="multi", key="f_slot", format_func=slot_label)
+        st.pills(t("主題", "Topic"), [ALL, *DOMAINS], selection_mode="multi", key="w_domain", on_change=sync_domain,
+                 args=("w_domain",), format_func=lambda d: f":material/{DOMAIN_ICONS[d]}: {dom_label(d)}")
+        st.toggle(t("顯示已結束的課", "Show ended classes"), key="f_show_ended")
+        if st.session_state.home:
+            st.toggle(t("看全台南的課", "Show all of Tainan"), key="f_all")
+        st.button(t("完成，收起篩選條件", "Done — hide filters"), key="filters_done", type="primary",
+                  icon=":material/expand_less:", on_click=lambda: st.session_state.update(filters_open=False))
+    else:
+        extra = [x for x, on in ((t("含已結束的課", "incl. ended"), st.session_state.f_show_ended),
+                                 (t("全台南", "all of Tainan"), st.session_state.home and st.session_state.f_all)) if on]
+        with st.container(key="filters_closed", horizontal=True, horizontal_alignment="distribute",
+                          vertical_alignment="center"):
+            st.markdown(f'<p class="summary"><span class="ms" aria-hidden="true">tune</span><b>{t("篩選條件：", "Filters: ")}</b>'
+                        f'{html.escape(" · ".join([chosen_text(), *extra]))}</p>', unsafe_allow_html=True, width="content")
+            st.button(t("修改條件", "Change filters"), key="filters_edit", icon=":material/expand_more:",
+                      on_click=lambda: st.session_state.update(filters_open=True))
 
 today = today_tpe()
 FILTER_KEYS = ("f_weekday", "f_slot", "f_domain", "f_show_ended", "f_status")
