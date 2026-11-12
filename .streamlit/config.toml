@@ -1,0 +1,16 @@
+# 台南樂齡課程搜尋的主題。色票和 app.py 開頭 THEME_CSS 的 :root 變數是同一份，改色要兩邊一起改。
+[theme]
+base = "light"
+primaryColor = "#E8D575"             # 主色：選中的標籤、主要按鈕、地圖上「我住的區」
+backgroundColor = "#FFFCF3"          # 頁面背景（米白）
+secondaryBackgroundColor = "#FFF4CC" # 淡黃：鄰近區、提示橫幅、主題標籤底色
+textColor = "#1A1A1A"                # 主要文字
+linkColor = "#1A1A1A"
+borderColor = "#242223"              # 墨色外框
+redColor = "#D6331C"                 # 只給警示用
+
+# 字體：Noto Sans TC 400／700（Google Fonts）；內文 18px 起跳，標題 700
+font = "Noto Sans TC:https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap, sans-serif"
+headingFont = "Noto Sans TC:https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap, sans-serif"
+baseFontSize = 18
+headingFontWeights = 700
