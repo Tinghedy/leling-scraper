@@ -105,21 +105,39 @@ export default function(component) {
 """
 district_map = st.components.v2.component("tainan_district_map", css=MAP_CSS, js=MAP_JS)
 
-# 捲動偵測：完整篩選區（.st-key-filters）捲出畫面後，在 <body> 加 data-filters-hidden，CSS 才把摘要列顯示出來；
-# 捲回去看得到篩選區時拿掉。Streamlit 本身抓不到捲動位置，所以用一個看不見的元件跑這段 JS。
+# 捲動偵測（Streamlit 本身抓不到捲動位置，所以用一個看不見的元件跑這段 JS），在 <body> 上切換兩個狀態：
+#   data-filters-hidden：完整篩選區（.st-key-filters）捲出畫面 → 顯示釘在上方的摘要列
+#   data-bar-open：摘要列出現後，往上捲（累積超過 THRESH）→ 展開標籤面板；往下捲 → 收起
+# 狀態放在 <body> 上，Streamlit 重跑（點了標籤）時不會被重設，面板維持展開。
 WATCH_JS = """
 export default function() {
-    const update = () => {
+    const THRESH = 24;  // 累積捲動超過這麼多 px 才切換，避免手指微動就開開關關
+    const update = (e) => {
         const f = document.querySelector(".st-key-filters");
         const hidden = !!f && f.getBoundingClientRect().bottom < 90;  // 90px ≈ 上方工具列＋一點緩衝
         document.body.toggleAttribute("data-filters-hidden", hidden);
+        if (!hidden) { document.body.removeAttribute("data-bar-open"); return; }
+        const el = !e || e.target === document ? document.scrollingElement : e.target;
+        if (!el || typeof el.scrollTop !== "number") return;
+        if (el.closest && el.closest(".st-key-summary_bar")) return;  // 面板自己的捲動不算
+        const w = window.__lelingScroll, y = el.scrollTop;
+        if (w.el !== el) { w.el = el; w.anchor = y; return; }
+        const open = document.body.hasAttribute("data-bar-open");
+        // 錨點記住「目前狀態下捲到最遠的位置」，只累積反方向的距離
+        if (open) {
+            if (y - w.anchor > THRESH) { document.body.removeAttribute("data-bar-open"); w.anchor = y; }
+            else if (y < w.anchor) w.anchor = y;
+        } else {
+            if (w.anchor - y > THRESH) { document.body.setAttribute("data-bar-open", ""); w.anchor = y; }
+            else if (y > w.anchor) w.anchor = y;
+        }
     };
-    if (!window.__lelingScrollWatch) {  // 每次重跑都會呼叫，監聽只掛一次
-        window.__lelingScrollWatch = true;
+    if (!window.__lelingScroll) {  // 每次重跑都會呼叫，監聽只掛一次
+        window.__lelingScroll = { el: null, anchor: 0 };
         document.addEventListener("scroll", update, { capture: true, passive: true });  // 捕捉任何捲動容器
-        window.addEventListener("resize", update);
+        window.addEventListener("resize", () => update());
     }
-    requestAnimationFrame(update);  // 重跑後版面可能變了，重新判斷一次
+    requestAnimationFrame(() => update());  // 重跑後版面可能變了，重新判斷一次
 }
 """
 scroll_watch = st.components.v2.component("filters_scroll_watch", js=WATCH_JS)
@@ -366,9 +384,24 @@ body[data-filters-hidden] .st-key-summary_bar { opacity: 1; visibility: visible;
 .summary { margin: 0; font-size: 20px !important; }
 .summary .ms { vertical-align: -5px; margin-right: 4px; }
 .summary b { font-size: 22px; }
-.st-key-summary_bar [data-testid="stPopover"] button { min-height: var(--tap); border-radius: 999px !important;
-  background: var(--primary) !important; border: 1.5px solid var(--ink) !important; padding: 0 18px !important; }
-.st-key-summary_bar [data-testid="stPopover"] button p { font-weight: 700 !important; color: var(--text) !important; }
+/* 往上捲時展開的標籤面板：grid-template-rows 0fr → 1fr 做真正的高度動畫（下面的東西不會瞬間跳），
+   收 0.2 秒、開 0.25 秒，先快後慢；系統開了「減少動態效果」就直接切換 */
+.st-key-summary_bar { gap: 0 !important; }
+.st-key-summary_bar [data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
+.st-key-bar_panel { display: grid !important; grid-template-rows: 0fr; opacity: 0;
+  transition: grid-template-rows .2s cubic-bezier(.4, 0, .2, 1), opacity .15s ease-out; }
+.st-key-bar_panel > * { min-height: 0; overflow: hidden; }
+body[data-bar-open] .st-key-bar_panel { grid-template-rows: 1fr; opacity: 1;
+  transition: grid-template-rows .25s cubic-bezier(.2, 0, 0, 1), opacity .2s ease-out .05s; }
+.st-key-bar_panel_inner { padding-top: 8px; max-height: 60vh; overflow: hidden; }
+body[data-bar-open] .st-key-bar_panel_inner { overflow-y: auto; }  /* 收起來時不能捲，不然會吃掉頁面的捲動 */
+.st-key-bar_panel_inner .stButtonGroup label, .st-key-bar_panel_inner [data-testid="stWidgetLabel"] { margin-bottom: 0; }
+.summary .hint { color: var(--muted); font-size: 18px; white-space: nowrap; }
+body[data-bar-open] .summary .hint { display: none; }
+.summary .nowrap { white-space: nowrap; }
+@media (max-width: 640px) { .summary .hint { display: block; } .summary .hint .dot { display: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .st-key-bar_panel, body[data-bar-open] .st-key-bar_panel, .st-key-summary_bar { transition: none !important; } }
 .st-key-filters .stButtonGroup label, .st-key-filters [data-testid="stWidgetLabel"] { margin-bottom: 0; }
 .stButtonGroup [role="toolbar"] { flex-wrap: wrap !important; gap: var(--gap) !important; }
 a { color: var(--text) !important; text-decoration: underline; }
@@ -770,18 +803,24 @@ def summary_html() -> str:
               sep.join(map(pill_label, st.session_state.f_status))]
     parts = [dist_label(home) if home else t("全台南", "All of Tainan")] + [x for x in chosen if x]
     return (f'<p class="summary">{icon("location_on")}{html.escape(" · ".join(parts))}'
-            + t(f' · 符合 <b>{len(shown)}</b> 門</p>', f' · <b>{len(shown)}</b> match</p>'))
+            + ' · <span class="nowrap">' + t(f'符合 <b>{len(shown)}</b> 門', f'<b>{len(shown)}</b> match') + '</span>'
+            # 收起時提示怎麼展開（展開後用 CSS 藏起來；手機上自己一行）
+            + f'<span class="hint"><span class="dot"> · </span>{icon("swipe_down")}'
+              f'{t("往上滑可以改條件", "Scroll up to change filters")}</span></p>')
 
 
-# 釘在上方的摘要列：完整篩選區捲出畫面後才出現（見 WATCH_JS），按「修改條件」直接改，不用捲回頂端
+# 釘在上方的篩選列（見 WATCH_JS）：完整篩選區捲出畫面後出現。
+#   往下捲＝收成一行摘要；往上捲＝標籤從這一行滑下來展開，可以直接改條件，不用捲回頂端。
+#   收合／展開只在瀏覽器裡用 CSS 動畫切換（不經過 Python 重跑），所以很快。
 scroll_watch(key="scroll_watch")
-with st.container(key="summary_bar", horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
-    st.markdown(summary_html(), unsafe_allow_html=True, width="content")
+with st.container(key="summary_bar"):
+    st.markdown(summary_html(), unsafe_allow_html=True)
     # 面板裡的標籤每次重跑前先對齊目前的條件（頁面上的標籤改了，這裡也要跟著）
     st.session_state.pop_weekday = list(st.session_state.f_weekday)
     st.session_state.pop_slot = list(st.session_state.f_slot)
     st.session_state.pop_domain = list(st.session_state.w_domain)
-    with st.popover(t("修改條件", "Change filters"), icon=":material/tune:"):
+    # 兩層容器：外層用 grid 0fr ↔ 1fr 做高度動畫，內層是實際內容
+    with st.container(key="bar_panel"), st.container(key="bar_panel_inner"):
         st.pills(t("星期", "Day"), WEEKDAYS, selection_mode="multi", key="pop_weekday", format_func=wd_label,
                  on_change=from_popover, args=("weekday",))
         st.pills(t("時段", "Time of day"), list(SLOTS), selection_mode="multi", key="pop_slot", format_func=slot_label,
