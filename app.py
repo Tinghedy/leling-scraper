@@ -141,6 +141,78 @@ export default function() {
 }
 """
 scroll_watch = st.components.v2.component("filters_scroll_watch", js=WATCH_JS)
+
+# 篩選標籤自動收起：星期、時段、主題三組都點過、而且都有選中的標籤，最後一次點完停 IDLE 毫秒沒再點，
+# 就用 GSAP 把標籤區（.st-key-filters_body）收起來，原地換成一行摘要（.f-summary），點摘要再展開。
+#   - 停一下才收：標籤可複選，不能點一個就收。主題預設就是「全部」，所以要使用者自己點過主題才算選完。
+#   - 動畫都在瀏覽器裡跑，不經過 Python 重跑；收合狀態記在 <body data-f-collapsed>，重跑時不會被重設。
+#   - GSAP 從 CDN 載入（只是 JS 函式庫，不是 API）；載不到就不播動畫、直接收合。系統開了「減少動態效果」也不播。
+COLLAPSE_JS = """
+export default async function() {
+    const W = window.__lelingCollapse || (window.__lelingCollapse = { touched: new Set(), timer: null });
+    if (!W.gsapTried) {
+        W.gsapTried = true;
+        try { const m = await import("https://cdn.jsdelivr.net/npm/gsap@3.12.5/+esm"); W.gsap = m.gsap || m.default; }
+        catch (e) { W.gsap = null; }
+    }
+    if (W.bound) return;  // 每次重跑都會呼叫，監聽和函式只設一次
+    W.bound = true;
+    const IDLE = 1200;
+    const GROUPS = { weekday: ".st-key-f_weekday", slot: ".st-key-f_slot", domain: ".st-key-w_domain" };
+    const $ = (s) => document.querySelector(s);
+    // 動畫要做在外層 stLayoutWrapper：容器本身是 flex: 1 1 0%，設 height 沒有用
+    const panel = () => { const b = $(".st-key-filters_body"); return b && b.parentElement; };
+    const summary = () => $(".st-key-filters .f-summary");
+    const still = () => !W.gsap || matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const pressed = (sel) => [...document.querySelectorAll(sel + ' button[aria-pressed="true"]')].map((b) => {
+        const c = b.cloneNode(true);
+        c.querySelectorAll('[data-testid="stIconMaterial"], .material-icons, [translate="no"]').forEach((x) => x.remove());
+        return c.innerText.trim();
+    }).filter(Boolean);
+    const complete = () => Object.entries(GROUPS).every(([k, s]) => W.touched.has(k) && pressed(s).length);
+    const collapse = () => {
+        const el = panel(), sm = summary();
+        if (!el || !sm || document.body.hasAttribute("data-f-collapsed")) return;
+        sm.querySelector(".f-text").textContent = Object.values(GROUPS).map((s) => pressed(s).join(sm.dataset.sep || "、")).join(" · ");
+        const h = el.offsetHeight;
+        el.style.height = h + "px"; el.style.overflow = "hidden";
+        document.body.setAttribute("data-f-collapsed", "");
+        if (still()) { el.style.height = "0px"; return; }
+        const g = W.gsap;
+        g.timeline()
+          .to(el.querySelectorAll(".stButtonGroup button"), { opacity: 0, y: -6, duration: 0.15, stagger: 0.008, ease: "power1.in" })
+          .to(el, { height: 0, opacity: 0, duration: 0.3, ease: "power3.inOut" }, "-=0.05")
+          .fromTo(sm, { opacity: 0, y: -8, scale: 0.98 }, { opacity: 1, y: 0, scale: 1, duration: 0.25, ease: "power2.out" }, "-=0.15");
+    };
+    const expand = () => {
+        const el = panel();
+        if (!el || !document.body.hasAttribute("data-f-collapsed")) return;
+        el.style.height = el.offsetHeight + "px"; el.style.overflow = "hidden";  // 重跑換過元素時也從 0 開始長
+        document.body.removeAttribute("data-f-collapsed");
+        const done = () => { el.style.height = ""; el.style.overflow = ""; el.style.opacity = ""; };
+        if (still()) { done(); return; }
+        const g = W.gsap, btns = el.querySelectorAll(".stButtonGroup button");
+        g.set(btns, { opacity: 0, y: -6 });
+        g.timeline({ onComplete: done })
+          .to(el, { height: el.scrollHeight, opacity: 1, duration: 0.3, ease: "power3.out" })
+          .to(btns, { opacity: 1, y: 0, duration: 0.2, stagger: 0.008, ease: "power2.out", clearProps: "transform,opacity" }, "-=0.18");
+    };
+    const schedule = () => {
+        clearTimeout(W.timer);
+        W.timer = setTimeout(() => { if (complete()) collapse(); }, IDLE);
+    };
+    document.addEventListener("click", (e) => {
+        if (e.target.closest(".f-summary")) { expand(); return; }
+        const b = e.target.closest("button");
+        if (!b) return;
+        for (const [k, s] of Object.entries(GROUPS)) if (b.closest(s)) { W.touched.add(k); schedule(); }
+    }, true);
+    document.addEventListener("keydown", (e) => {
+        if ((e.key === "Enter" || e.key === " ") && e.target.closest && e.target.closest(".f-summary")) { e.preventDefault(); expand(); }
+    }, true);
+}
+"""
+filters_collapse = st.components.v2.component("filters_collapse", js=COLLAPSE_JS)
 SHOW_INFERRED = False  # 清單裡要不要標「⚠ 推論（原文沒明寫）」；暫時隱藏
 STATUS_ZH = {"upcoming": "即將開課", "ongoing": "進行中", "ended": "已結束", "unknown": "日期沒寫"}
 # 結果列旁的狀態標籤（可複選；都不選＝不限）
@@ -380,7 +452,17 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
                       transition: opacity .2s, transform .2s, visibility 0s .2s; }
 body[data-filters-hidden] .st-key-summary_bar { opacity: 1; visibility: visible; transform: none;
                                                 transition: opacity .2s, transform .2s; }
-.st-key-scroll_watch { display: none !important; }
+.st-key-scroll_watch, .st-key-filters_collapse { display: none !important; }
+/* 篩選標籤收起來後的那一行（COLLAPSE_JS）：平常藏著，收起來才出現；點了展開 */
+.f-summary { display: none; align-items: center; gap: 8px; flex-wrap: wrap; min-height: var(--tap);
+  padding: 6px 8px 6px 16px; background: var(--soft); border: 1.5px solid var(--ink); border-radius: 16px; cursor: pointer; }
+body[data-f-collapsed] .f-summary { display: flex; }
+.f-summary .f-text { font-weight: 700; flex: 1 1 12rem; min-width: 0; }  /* 窄螢幕：圖示和文字同一行，「修改」換下一行 */
+.f-summary .f-edit { display: inline-flex; align-items: center; gap: 2px; min-height: 40px; padding: 0 14px;
+  background: var(--card); border: 1.5px solid var(--ink); border-radius: 999px; font-weight: 700; white-space: nowrap; }
+.f-summary:hover .f-edit, .f-summary:focus-visible .f-edit { background: var(--primary); }
+.f-summary:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+body[data-f-collapsed] [data-testid="stLayoutWrapper"]:has(> .st-key-filters_body) { height: 0; overflow: hidden; opacity: 0; }  /* 重跑後新的元素也維持收起 */
 .summary { margin: 0; font-size: 20px !important; }
 .summary .ms { vertical-align: -5px; margin-right: 4px; }
 .summary b { font-size: 22px; }
@@ -647,13 +729,20 @@ with st.container(key="filters"):
     home = st.session_state.home
 
     st.markdown(t("**篩選條件**", "**Filters**"))
+    # 收起來時顯示的那一行：文字由 COLLAPSE_JS 從選中的標籤組出來，點了就展開
+    st.markdown(f'<div class="f-summary" data-sep="{t("、", ", ")}" role="button" tabindex="0" aria-label="{t("展開篩選條件", "Show filters")}">'
+                f'<span class="ms" aria-hidden="true">tune</span><span class="f-text"></span>'
+                f'<span class="f-edit">{t("修改", "Edit")}<span class="ms" aria-hidden="true">expand_more</span></span></div>',
+                unsafe_allow_html=True)
     # 選項一變就重跑：地圖數字和列表都用同一份 hits
-    # 手機寬度（< 640px）Streamlit 會把 columns 改成直向排列
     # 膠囊標籤可複選；手機上自動換行（不做左右滑動）
-    st.pills(t("星期", "Day"), WEEKDAYS, selection_mode="multi", key="f_weekday", format_func=wd_label)
-    st.pills(t("時段", "Time of day"), list(SLOTS), selection_mode="multi", key="f_slot", format_func=slot_label)
-    st.pills(t("主題", "Topic"), [ALL, *DOMAINS], selection_mode="multi", key="w_domain", on_change=sync_domain,
-             args=("w_domain",), format_func=lambda d: f":material/{DOMAIN_ICONS[d]}: {dom_label(d)}")
+    # 三組標籤都選好（停 1.2 秒沒再點）就用 GSAP 自動收起來（見 COLLAPSE_JS）
+    with st.container(key="filters_body"):
+        st.pills(t("星期", "Day"), WEEKDAYS, selection_mode="multi", key="f_weekday", format_func=wd_label)
+        st.pills(t("時段", "Time of day"), list(SLOTS), selection_mode="multi", key="f_slot", format_func=slot_label)
+        st.pills(t("主題", "Topic"), [ALL, *DOMAINS], selection_mode="multi", key="w_domain", on_change=sync_domain,
+                 args=("w_domain",), format_func=lambda d: f":material/{DOMAIN_ICONS[d]}: {dom_label(d)}")
+filters_collapse(key="filters_collapse")
 
 st.toggle(t("顯示已結束的課", "Show ended classes"), key="f_show_ended")
 if st.session_state.home:
