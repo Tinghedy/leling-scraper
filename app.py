@@ -130,6 +130,63 @@ STATUS_PILLS = {"ongoing": "進行中", "week": "本週有課", "upcoming": "即
 SOURCE_SHORT = {"moe_doc": "教育部公告", "fb_post": "Facebook"}
 SOURCE_ZH = {"moe_doc": "教育部樂齡學習網公告", "fb_post": "FB 貼文"}
 
+# ── 英文介面：只翻介面文字；課名、中心、地點是原文資料，不翻（搜尋時不能呼叫外部 API）──
+WEEKDAYS_EN = dict(zip(WEEKDAYS, ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]))
+SLOTS_EN = {"morning": "Morning", "afternoon": "Afternoon", "evening": "Evening"}
+DOMAINS_EN = {ALL: "All", "數位科技": "Digital & Tech", "健康運動": "Health & Exercise", "藝術手作": "Arts & Crafts",
+              "音樂表演": "Music & Performance", "語言文化": "Language & Culture", "生活財務": "Daily Life & Money",
+              "社區志工": "Community & Volunteering"}
+STATUS_EN = {"upcoming": "Starting soon", "ongoing": "Ongoing", "ended": "Ended", "unknown": "Dates not listed"}
+STATUS_PILLS_EN = {"ongoing": "Ongoing", "week": "Classes this week", "upcoming": "Starting soon"}
+SOURCE_SHORT_EN = {"moe_doc": "MOE notice", "fb_post": "Facebook"}
+SOURCE_EN = {"moe_doc": "Ministry of Education lifelong-learning notices", "fb_post": "Facebook posts"}
+DISTRICT_EN = {
+    "七股區": "Qigu", "下營區": "Xiaying", "中西區": "West Central", "仁德區": "Rende", "佳里區": "Jiali",
+    "六甲區": "Liujia", "北區": "North", "北門區": "Beimen", "南化區": "Nanhua", "南區": "South",
+    "善化區": "Shanhua", "大內區": "Danei", "學甲區": "Xuejia", "安南區": "Annan", "安定區": "Anding",
+    "安平區": "Anping", "官田區": "Guantian", "將軍區": "Jiangjun", "山上區": "Shanshang", "左鎮區": "Zuozhen",
+    "後壁區": "Houbi", "新化區": "Xinhua", "新市區": "Xinshi", "新營區": "Xinying", "東區": "East",
+    "東山區": "Dongshan", "柳營區": "Liuying", "楠西區": "Nanxi", "歸仁區": "Guiren", "永康區": "Yongkang",
+    "玉井區": "Yujing", "白河區": "Baihe", "西港區": "Xigang", "關廟區": "Guanmiao", "鹽水區": "Yanshui",
+    "麻豆區": "Madou", "龍崎區": "Longqi",
+}
+
+
+def is_en() -> bool:
+    return st.session_state.get("lang") == "en"
+
+
+def t(zh: str, en: str) -> str:
+    """介面文字：依目前語言回傳中文或英文"""
+    return en if is_en() else zh
+
+
+def wd_label(w: str) -> str:
+    return t("週" + w, WEEKDAYS_EN[w])
+
+
+def slot_label(s: str) -> str:
+    return t(SLOTS[s], SLOTS_EN[s])
+
+
+def dom_label(d: str) -> str:
+    return t(d, DOMAINS_EN.get(d, d))
+
+
+def dist_label(d: str, short: bool = False) -> str:
+    """英文：East District（地圖上只寫 East）"""
+    if not is_en() or d not in DISTRICT_EN:
+        return d
+    return DISTRICT_EN[d] if short else f"{DISTRICT_EN[d]} District"
+
+
+def pill_label(k: str) -> str:
+    return t(STATUS_PILLS[k], STATUS_PILLS_EN[k])
+
+
+def n_courses(n: int) -> str:
+    return t(f"{n} 門", f"{n} course" + ("" if n == 1 else "s"))
+
 # 台南 37 區的相鄰關係：由內政部鄉鎮界線（taiwan-atlas towns-10t）算出，邊界有共用頂點就算相鄰
 NEIGHBORS = {
     "七股區": ["佳里區", "安南區", "將軍區", "西港區"],
@@ -215,7 +272,9 @@ def merge_courses(rows: list[dict]) -> list[dict]:
         out.append(m)
     return out
 
-st.set_page_config(page_title="台南樂齡課程搜尋", layout="wide")
+# 語言：網址帶 ?lang=en 就直接開英文版（可以把英文版網址分享給別人）
+st.session_state.setdefault("lang", "en" if st.query_params.get("lang") == "en" else "zh")
+st.set_page_config(page_title=t("台南樂齡課程搜尋", "Tainan Senior Classes"), layout="wide")
 # 使用者是長者和家屬：字放大（內文最小 18px，這裡用 20px）、行高 1.6、對比加深
 st.markdown(f"<style>{THEME_CSS}</style>", unsafe_allow_html=True)
 st.markdown("""<style>
@@ -284,7 +343,15 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
   [data-testid="stColumn"]:has(.st-key-map_box) > [data-testid="stVerticalBlock"] { display: contents !important; }
   [data-testid="stLayoutWrapper"]:has(> .st-key-map_box) { order: -1; }
   [data-testid="stElementContainer"]:has(h1) { order: -2; }
+  [data-testid="stLayoutWrapper"]:has(> .st-key-lang_box) { order: -3; }
 }
+/* 語言切換：放在標題上方靠右，和標題之間不留大空白 */
+.st-key-lang_box { margin-bottom: -12px; }
+.st-key-w_lang button[aria-checked] { border: 1.5px solid var(--ink) !important; color: var(--text) !important;
+  min-height: var(--tap) !important; padding: 0 18px !important; }
+.st-key-w_lang button[aria-checked="false"] { background: var(--card) !important; }
+.st-key-w_lang button[aria-checked="true"] { background: var(--primary) !important; }
+.st-key-w_lang button[aria-checked="true"] p { font-weight: 700 !important; }
 /* 摘要列（目前條件＋門數＋「修改條件」）：平常藏起來，完整篩選區捲出畫面後才出現、釘在上方。
    外層 stLayoutWrapper（主欄的直接子元素）設 sticky、高度 0，摘要列疊在內容上面，出現／消失都不會推動版面 */
 [data-testid="stLayoutWrapper"]:has(> .st-key-summary_bar) { position: sticky; top: 3.75rem; z-index: 990;
@@ -317,7 +384,7 @@ def load_courses(mtime: float) -> list[dict]:
 def data_updated(mtime: float) -> str:
     """資料更新日期：courses.json 是課程清單，沒有記錄更新日期的欄位，
     所以用合併前全部資料中最新一筆貼文或公告的日期（post_date）。不用檔案修改時間（部署後會變成部署當天）。"""
-    return max((c.get("post_date") or "" for c in json.loads(COURSES.read_text(encoding="utf-8"))), default="") or "不明"
+    return max((c.get("post_date") or "" for c in json.loads(COURSES.read_text(encoding="utf-8"))), default="")
 
 
 @st.cache_data
@@ -342,7 +409,7 @@ def map_svg(home: str, near: set[str], counts: dict[str, int], picked: str | Non
     m = load_map()
     vb = view_box(focus)
     # 字級用 viewBox 單位：放大時字跟著縮，螢幕上看起來差不多大，小區的區名才不會互相壓到
-    fs = min(11.0, 0.032 * float(vb.split()[2]))
+    fs = min(11.0, 0.032 * float(vb.split()[2])) * (0.85 if is_en() else 1)  # 英文區名比較長，字稍小
     label_style = f'style="font-size:{fs:.2f}px;stroke-width:{fs * 0.27:.2f}px"'
     groups, labels = [], []
     # 選到的區最後畫，粗框才不會被鄰區蓋住
@@ -353,12 +420,13 @@ def map_svg(home: str, near: set[str], counts: dict[str, int], picked: str | Non
             tier += " zero"
         paths = "".join(f'<path class="a" d="{p}"/>' for p in d["areas"]) + \
             "".join(f'<path class="l" d="{p}"/>' for p in d["lines"])
+        shown_name = dist_label(name, short=True)  # data-name 維持中文（點選時傳回 Python 用）
         groups.append(f'<g class="d {tier}{" picked" if name == picked else ""}" data-name="{name}" tabindex="0" '
-                      f'role="button" aria-label="{name}，{n} 門課"><title>{name}：{n} 門</title>{paths}</g>')
+                      f'role="button" aria-label="{dist_label(name)}{t("，", ", ")}{n_courses(n)}"><title>{dist_label(name)}{t("：", ": ")}{n_courses(n)}</title>{paths}</g>')
         x, y = d["label"]
-        labels.append(f'<text class="t {tier.replace("home zero", "zero")}" x="{x}" y="{y}" {label_style}><tspan x="{x}" dy="-0.15em">{name}</tspan>'
+        labels.append(f'<text class="t {tier.replace("home zero", "zero")}" x="{x}" y="{y}" {label_style}><tspan x="{x}" dy="-0.15em">{shown_name}</tspan>'
                       f'<tspan x="{x}" dy="1.15em">{n}</tspan></text>')
-    return (f'<svg viewBox="{vb}" aria-label="臺南市行政區地圖">'
+    return (f'<svg viewBox="{vb}" aria-label="{t("臺南市行政區地圖", "Map of Tainan districts")}">'
             + "".join(groups) + "".join(labels) + "</svg>")
 
 
@@ -376,21 +444,22 @@ def missing_text(c: dict) -> str | None:
     """依實際缺的欄位寫警示；有日期就一定有星期，所以只看日期和開始時間。"""
     no_date, no_clock = not c.get("dates"), not c["start_time"]
     if no_date and no_clock:
-        return "日期和時間都沒寫"
+        return t("日期和時間都沒寫", "Dates and time not listed")
     if no_date:
-        return "上課日期沒寫"
+        return t("上課日期沒寫", "Dates not listed")
     if no_clock:
-        return "上課時間沒寫"
+        return t("上課時間沒寫", "Time not listed")
     return None
 
 
 def phone_html(center: str, phones: dict[str, str]) -> str:
     """centers.csv 有 phone 欄才顯示可撥號的連結；目前沒有這個欄位，只寫「請打電話向中心確認」。"""
     tel = phones.get(center)
+    ask = t("請打電話向中心確認", "please call the center to confirm")
     if not tel:
-        return "請打電話向中心確認"
+        return ask
     digits = "".join(ch for ch in tel if ch.isdigit() or ch == "+")
-    return f'請打電話向中心確認：<a href="tel:{html.escape(digits)}">{html.escape(tel)}</a>'
+    return f'{ask}{t("：", ": ")}<a href="tel:{html.escape(digits)}">{html.escape(tel)}</a>'
 
 
 def matches(c: dict, wd: list, slot: list, dom: list) -> str | None:
@@ -466,9 +535,12 @@ def date_text(c: dict, today: str) -> str:
 
 
 def when(c: dict) -> str:
-    days = ("週" + "、".join(c["weekday"])) if c["weekday"] else "星期沒寫"
-    t = f"{c['start_time']}–{c['end_time'] or '?'}" if c["start_time"] else "時間沒寫"
-    return f"{days} {t}"
+    if c["weekday"]:
+        days = t("週" + "、".join(c["weekday"]), ", ".join(WEEKDAYS_EN[w] for w in c["weekday"]))
+    else:
+        days = t("星期沒寫", "Day not listed")
+    clock = f"{c['start_time']}–{c['end_time'] or '?'}" if c["start_time"] else t("時間沒寫", "time not listed")
+    return f"{days} {clock}"
 
 
 for k, v in (("f_weekday", []), ("f_slot", []), ("f_domain", []), ("home", None), ("home_edit", False), ("f_show_ended", False), ("f_status", []), ("f_all", False), ("picked", None)):
@@ -491,9 +563,26 @@ def sync_domain(src: str = "w_domain") -> None:
 
 
 st.session_state.setdefault("w_domain", st.session_state.f_domain or [ALL])
-st.title("台南樂齡課程搜尋")
+def set_lang() -> None:
+    """語言切換；不讓它被取消選取（再點一次目前的語言時維持原樣），並寫進網址方便分享"""
+    if st.session_state.w_lang is None:
+        st.session_state.w_lang = st.session_state.lang
+        return
+    st.session_state.lang = st.session_state.w_lang
+    if st.session_state.lang == "en":
+        st.query_params["lang"] = "en"
+    else:
+        st.query_params.pop("lang", None)
+
+
+st.session_state.w_lang = st.session_state.lang
+with st.container(key="lang_box", horizontal=True, horizontal_alignment="right"):
+    st.segmented_control("語言 Language", ["zh", "en"], key="w_lang", on_change=set_lang,
+                         format_func={"zh": "中文", "en": "English"}.get, label_visibility="collapsed")
+st.title(t("台南樂齡課程搜尋", "Tainan Senior Learning Classes"))
 if not COURSES.exists():
-    st.warning("還沒有課程資料。請先執行 import_courses.py 產生 data/courses.json。")
+    st.warning(t("還沒有課程資料。請先執行 import_courses.py 產生 data/courses.json。",
+                 "No course data yet. Run import_courses.py to create data/courses.json."))
     st.stop()
 courses = load_courses(COURSES.stat().st_mtime)
 centers = load_centers()
@@ -512,27 +601,30 @@ with st.container(key="filters"):
     if st.session_state.home is None or st.session_state.home_edit:
         with st.container(key="home_banner"):
             b1, b2 = st.columns([3, 2], vertical_alignment="center")
-            b1.markdown("**選你住的區，先看離家近的課**")
-            b2.selectbox("我住在", DISTRICTS, key="w_home", on_change=set_home, label_visibility="collapsed",
+            b1.markdown(t("**選你住的區，先看離家近的課**", "**Pick your district to see classes near home first**"))
+            # 英文介面的選單同時列出中文區名（East District（東區）），對照地址比較方便
+            b2.selectbox(t("我住在", "I live in"), DISTRICTS, key="w_home", on_change=set_home, label_visibility="collapsed",
                          index=DISTRICTS.index(st.session_state.home) if st.session_state.home else None,
-                         placeholder="請選擇行政區")
+                         format_func=lambda d: t(d, f"{dist_label(d)} ({d})"),
+                         placeholder=t("請選擇行政區", "Choose a district"))
     else:
-        st.button(f"我住在：{st.session_state.home}", key="home_chip", help="點一下可以改住的區",
+        st.button(t(f"我住在：{st.session_state.home}", f"I live in: {dist_label(st.session_state.home)}"),
+                  key="home_chip", help=t("點一下可以改住的區", "Tap to change your district"),
                   on_click=lambda: st.session_state.update(home_edit=True))
     home = st.session_state.home
 
-    st.markdown("**篩選條件**")
+    st.markdown(t("**篩選條件**", "**Filters**"))
     # 選項一變就重跑：地圖數字和列表都用同一份 hits
     # 手機寬度（< 640px）Streamlit 會把 columns 改成直向排列
     # 膠囊標籤可複選；手機上自動換行（不做左右滑動）
-    st.pills("星期", WEEKDAYS, selection_mode="multi", key="f_weekday", format_func=lambda w: "週" + w)
-    st.pills("時段", list(SLOTS), selection_mode="multi", key="f_slot", format_func=SLOTS.get)
-    st.pills("主題", [ALL, *DOMAINS], selection_mode="multi", key="w_domain", on_change=sync_domain, args=("w_domain",),
-             format_func=lambda d: f":material/{DOMAIN_ICONS[d]}: {d}")
+    st.pills(t("星期", "Day"), WEEKDAYS, selection_mode="multi", key="f_weekday", format_func=wd_label)
+    st.pills(t("時段", "Time of day"), list(SLOTS), selection_mode="multi", key="f_slot", format_func=slot_label)
+    st.pills(t("主題", "Topic"), [ALL, *DOMAINS], selection_mode="multi", key="w_domain", on_change=sync_domain,
+             args=("w_domain",), format_func=lambda d: f":material/{DOMAIN_ICONS[d]}: {dom_label(d)}")
 
-st.toggle("顯示已結束的課", key="f_show_ended")
+st.toggle(t("顯示已結束的課", "Show ended classes"), key="f_show_ended")
 if st.session_state.home:
-    st.toggle("看全台南的課", key="f_all")
+    st.toggle(t("看全台南的課", "Show all of Tainan"), key="f_all")
 
 today = today_tpe()
 FILTER_KEYS = ("f_weekday", "f_slot", "f_domain", "f_show_ended", "f_status")
@@ -574,13 +666,13 @@ def in_view(rows: list[dict]) -> list[dict]:
 
 def sectioned(rows: list[dict]) -> list[tuple[str, list[dict]]]:
     if picked:
-        return [(picked, rows)]
+        return [(dist_label(picked), rows)]
     if not home:
-        return [("全台南", rows)]
-    out = [(home, [c for c in rows if c["district"] == home]),
-           ("鄰近區", [c for c in rows if c["district"] in near])]
+        return [(t("全台南", "All of Tainan"), rows)]
+    out = [(dist_label(home), [c for c in rows if c["district"] == home]),
+           (t("鄰近區", "Nearby districts"), [c for c in rows if c["district"] in near])]
     if area is None:
-        out.append(("其他區", [c for c in rows if c["district"] not in mine]))
+        out.append((t("其他區", "Other districts"), [c for c in rows if c["district"] not in mine]))
     return out
 
 
@@ -607,49 +699,57 @@ def badge(c: dict) -> tuple[str, str]:
     """（樣式, 文字）：進行中 · 下一堂 11/16、即將開課 · 11/20 開始、已結束、日期沒寫"""
     st_, nd = status(c, today), next_date(c, today)
     if st_ == "ongoing":
-        return "ongoing", "進行中 · " + ("今天上課" if nd == today else f"下一堂 {short(nd)}" if nd else "")
+        nxt = t("今天上課", "Class today") if nd == today else t(f"下一堂 {short(nd)}", f"Next class {short(nd)}") if nd else ""
+        return "ongoing", t("進行中", "Ongoing") + " · " + nxt
     if st_ == "upcoming":
-        return "upcoming", f"即將開課 · {short(nd)} 開始"
-    return st_, STATUS_ZH[st_]
+        return "upcoming", t(f"即將開課 · {short(nd)} 開始", f"Starting soon · Starts {short(nd)}")
+    return st_, t(STATUS_ZH[st_], STATUS_EN[st_])
 
 
 def sessions_text(c: dict) -> str:
     ds = c.get("dates") or []
     if not ds:
-        return "日期沒寫"
-    return f"共 {len(ds)} 堂（{short(ds[0])}）" if len(ds) == 1 else f"共 {len(ds)} 堂（{short(ds[0])}～{short(ds[-1])}）"
+        return t("日期沒寫", "Dates not listed")
+    span = short(ds[0]) if len(ds) == 1 else f"{short(ds[0])}～{short(ds[-1])}"
+    return t(f"共 {len(ds)} 堂（{span}）", f"{len(ds)} session{'' if len(ds) == 1 else 's'} ({span.replace('～', '–')})")
 
 
 def back_button(key: str) -> None:
     """點了地圖上的某一區之後，回到原本範圍的按鈕"""
-    st.button(f"回到我住的區和鄰近區（{home}）" if home else "回到全台南的課", type="primary", key=key,
+    st.button(t(f"回到我住的區和鄰近區（{home}）", f"Back to my district and nearby ({dist_label(home)})") if home
+              else t("回到全台南的課", "Back to all of Tainan"), type="primary", key=key,
               use_container_width=True, on_click=apply, kwargs={"picked": None, "f_all": False})
 
 
 def card(c: dict) -> str:
     """卡片：左上狀態徽章 → 主題 · 來源 → 課名 → 時間、堂數、地點（各有圖示）→ 警示 → 看原文按鈕"""
     kind, text = badge(c)
-    meta = " · ".join(x for x in (c["domain"], SOURCE_SHORT.get(c["source_type"], "")) if x)
+    src = t(SOURCE_SHORT.get(c["source_type"], ""), SOURCE_SHORT_EN.get(c["source_type"], ""))
+    meta = " · ".join(x for x in (dom_label(c["domain"]) if c["domain"] else "", src) if x)
     links = "".join(f'<a class="src-btn" href="{html.escape(u)}" target="_blank" rel="noopener">'
-                    f'{icon("open_in_new")}看原文{f" {i}" if len(c["source_urls"]) > 1 else ""}</a>'
+                    f'{icon("open_in_new")}{t("看原文", "Original post")}{f" {i}" if len(c["source_urls"]) > 1 else ""}</a>'
                     for i, u in enumerate(c["source_urls"], 1))
     miss = missing_text(c)
     inf = "、".join(FIELD_ZH.get(f, f) for f in c["inferred_fields"])
-    place = f'{c["center"].replace("樂齡學習中心", "")} · {c["venue"] or "地點沒寫"}'
+    # 中心和地點是原文資料，英文介面也照原文顯示，前面加上英文區名方便辨認
+    place = (t("", f"{dist_label(c['district'])} · ") if c.get("district") else "") + \
+        f'{c["center"].replace("樂齡學習中心", "")} · {c["venue"] or t("地點沒寫", "venue not listed")}'
     return (f'<div class="card"><span class="badge s-{kind}">{html.escape(text)}</span>'
             + (f'<div class="meta">{html.escape(meta)}</div>' if meta else "")
             + f'<div class="name">{html.escape(c["course_name"] or "")}</div>'
             f'<div class="row">{icon("schedule")}<span>{html.escape(when(c))}</span></div>'
             f'<div class="row">{icon("calendar_month")}<span>{html.escape(sessions_text(c))}</span></div>'
             f'<div class="row">{icon("location_on")}<span>{html.escape(place)}</span></div>'
-            + (f'<div class="row warn">{icon("warning", "warn")}<span>{miss}，{phone_html(c["center"], PHONES)}</span></div>'
+            + (f'<div class="row warn">{icon("warning", "warn")}<span>{miss}{t("，", "; ")}{phone_html(c["center"], PHONES)}</span></div>'
                if miss else "")
             + (f'<div class="row warn">{icon("warning", "warn")}<span>推論（原文沒明寫）：{html.escape(inf)}</span></div>'
                if inf and SHOW_INFERRED else "")
             + f'<div class="src">{links}</div></div>')
 
 
-where = f"只看{picked}" if picked else "全台南" if area is None else f"{home}和鄰近區"
+where = (t(f"只看{picked}", f"only {dist_label(picked)}") if picked
+         else t("全台南", "all of Tainan") if area is None
+         else t(f"{home}和鄰近區", f"{dist_label(home)} and nearby"))
 
 
 
@@ -663,13 +763,14 @@ def from_popover(kind: str) -> None:
 
 def summary_html() -> str:
     # 只列出有選的條件，摘要列才短（手機上盡量一行）；什麼都沒選就只寫區和門數
-    chosen = ["、".join("週" + w for w in st.session_state.f_weekday),
-              "、".join(SLOTS[x] for x in st.session_state.f_slot),
-              "、".join(st.session_state.f_domain),
-              "、".join(STATUS_PILLS[x] for x in st.session_state.f_status)]
-    parts = [home or "全台南"] + [x for x in chosen if x]
+    sep = t("、", ", ")
+    chosen = [sep.join(map(wd_label, st.session_state.f_weekday)),
+              sep.join(map(slot_label, st.session_state.f_slot)),
+              sep.join(map(dom_label, st.session_state.f_domain)),
+              sep.join(map(pill_label, st.session_state.f_status))]
+    parts = [dist_label(home) if home else t("全台南", "All of Tainan")] + [x for x in chosen if x]
     return (f'<p class="summary">{icon("location_on")}{html.escape(" · ".join(parts))}'
-            f' · 符合 <b>{len(shown)}</b> 門</p>')
+            + t(f' · 符合 <b>{len(shown)}</b> 門</p>', f' · <b>{len(shown)}</b> match</p>'))
 
 
 # 釘在上方的摘要列：完整篩選區捲出畫面後才出現（見 WATCH_JS），按「修改條件」直接改，不用捲回頂端
@@ -680,13 +781,14 @@ with st.container(key="summary_bar", horizontal=True, horizontal_alignment="dist
     st.session_state.pop_weekday = list(st.session_state.f_weekday)
     st.session_state.pop_slot = list(st.session_state.f_slot)
     st.session_state.pop_domain = list(st.session_state.w_domain)
-    with st.popover("修改條件", icon=":material/tune:"):
-        st.pills("星期", WEEKDAYS, selection_mode="multi", key="pop_weekday", format_func=lambda w: "週" + w,
+    with st.popover(t("修改條件", "Change filters"), icon=":material/tune:"):
+        st.pills(t("星期", "Day"), WEEKDAYS, selection_mode="multi", key="pop_weekday", format_func=wd_label,
                  on_change=from_popover, args=("weekday",))
-        st.pills("時段", list(SLOTS), selection_mode="multi", key="pop_slot", format_func=SLOTS.get,
+        st.pills(t("時段", "Time of day"), list(SLOTS), selection_mode="multi", key="pop_slot", format_func=slot_label,
                  on_change=from_popover, args=("slot",))
-        st.pills("主題", [ALL, *DOMAINS], selection_mode="multi", key="pop_domain",
-                 format_func=lambda d: f":material/{DOMAIN_ICONS[d]}: {d}", on_change=from_popover, args=("domain",))
+        st.pills(t("主題", "Topic"), [ALL, *DOMAINS], selection_mode="multi", key="pop_domain",
+                 format_func=lambda d: f":material/{DOMAIN_ICONS[d]}: {dom_label(d)}",
+                 on_change=from_popover, args=("domain",))
 
 # 桌機：列表在左、地圖在右；手機（< 640px）columns 直向排列，列表就在篩選條件下方、地圖上方
 col_list, col_map = st.columns([11, 9], gap="large")
@@ -694,16 +796,20 @@ col_list, col_map = st.columns([11, 9], gap="large")
 # ── 課程列表 ──
 with col_list:
     def status_pills() -> None:
-        st.pills("狀態", list(STATUS_PILLS), selection_mode="multi", key="f_status", format_func=STATUS_PILLS.get,
-                 label_visibility="collapsed")
+        st.pills(t("狀態", "Status"), list(STATUS_PILLS), selection_mode="multi", key="f_status",
+                 format_func=pill_label, label_visibility="collapsed")
 
     # 結果列：「符合 N 門 · 資料更新於 YYYY/MM/DD」；狀態標籤放在第一個分區小標題的同一行、靠右（右緣和卡片對齊）
-    st.markdown(f'<p class="result-line">符合 <b>{len(shown)}</b> 門（{html.escape(where)}）'
-                f'<span class="sep"> · </span>資料更新於 {data_updated(COURSES.stat().st_mtime).replace("-", "/")}</p>',
+    updated = data_updated(COURSES.stat().st_mtime).replace("-", "/") or t("不明", "unknown")
+    st.markdown(t(f'<p class="result-line">符合 <b>{len(shown)}</b> 門（{html.escape(where)}）'
+                  f'<span class="sep"> · </span>資料更新於 {updated}</p>',
+                  f'<p class="result-line"><b>{len(shown)}</b> {"class" if len(shown) == 1 else "classes"} found '
+                  f'({html.escape(where)})<span class="sep"> · </span>Data updated {updated}</p>'),
                 unsafe_allow_html=True)
     n_no_time = sum(1 for c in shown if no_time(c))
     if n_no_time and not shown_unsure:
-        st.caption(f"其中 {n_no_time} 門沒寫上課日期或時間，排在最後面。")
+        st.caption(t(f"其中 {n_no_time} 門沒寫上課日期或時間，排在最後面。",
+                     f"{n_courses(n_no_time)} without dates or times are listed last."))
 
     # 查無結果：列出「只放寬一個條件」各有幾門，點了直接套用（沒有小標題，狀態標籤自己一行靠右）
     if not shown:
@@ -712,24 +818,29 @@ with col_list:
         def count(area_: set[str] | None, **change) -> int:
             return sum(1 for c in filtered({**params, **change}) if area_ is None or c["district"] in area_)
 
-        here = "同區" if picked else ""
+        here = t("同區", "Same district, ") if picked else ""
         options = []
         if picked and home:
-            options.append((f"{home}和鄰近區", count(mine), {"picked": None, "f_all": False}))
+            options.append((t(f"{home}和鄰近區", f"{dist_label(home)} and nearby"), count(mine),
+                            {"picked": None, "f_all": False}))
         if area is not None:
-            options.append(("全台南", count(None), {"picked": None, "f_all": True}))
-        for key, label in (("f_weekday", f"{here}其他星期"), ("f_slot", f"{here}其他時段"),
-                           ("f_domain", f"{here}其他主題")):
+            options.append((t("全台南", "All of Tainan"), count(None), {"picked": None, "f_all": True}))
+        for key, zh, en in (("f_weekday", "其他星期", "other days"), ("f_slot", "其他時段", "other times"),
+                            ("f_domain", "其他主題", "other topics")):
             if params[key]:
-                options.append((label, count(area, **{key: []}), {key: []}))
+                options.append((here + t(zh, en), count(area, **{key: []}), {key: []}))
         if params["f_status"]:
-            options.append((f"{here}不限狀態", count(area, f_status=[]), {"f_status": []}))
+            options.append((here + t("不限狀態", "any status"), count(area, f_status=[]), {"f_status": []}))
         if not params["f_show_ended"]:
-            options.append((f"{here}已結束的課", count(area, f_show_ended=True), {"f_show_ended": True}))
+            options.append((here + t("已結束的課", "ended classes"), count(area, f_show_ended=True),
+                            {"f_show_ended": True}))
         options = [o for o in options if o[1]]
-        st.markdown("**這個條件下沒有課。**" + ("可以試試放寬一個條件：" if options else "請放寬條件。"))
+        st.markdown(t("**這個條件下沒有課。**", "**No classes match these filters.** ")
+                    + (t("可以試試放寬一個條件：", "Try loosening one filter:") if options
+                       else t("請放寬條件。", "Please loosen the filters.")))
         for i, (label, n, change) in enumerate(options):
-            st.button(f"{label}有 {n} 門", key=f"relax_{i}", on_click=apply, kwargs=change)
+            label = label if not is_en() or picked else label[:1].upper() + label[1:]
+            st.button(t(f"{label}有 {n} 門", f"{label}: {n_courses(n)}"), key=f"relax_{i}", on_click=apply, kwargs=change)
     else:
         # 分區小標題；每區內依下一次上課日排序。一次顯示 PAGE 門（跨區累計），條件一變就回到前 PAGE 門
         PAGE = 20
@@ -740,23 +851,26 @@ with col_list:
         for i, (title, items) in enumerate(sections):
             if i == 0:  # 第一個小標題靠左、狀態標籤靠右，同一行（放不下時標籤換到下一行）
                 with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
-                    st.markdown(f"#### {title} {len(items)} 門", width="content")
+                    st.markdown(f"#### {title}{t(' ', ' · ')}{n_courses(len(items))}", width="content")
                     status_pills()
             else:
-                st.markdown(f"#### {title} {len(items)} 門")
+                st.markdown(f"#### {title}{t(' ', ' · ')}{n_courses(len(items))}")
             st.markdown("".join(card(c) for c in items[:max(budget, 0)]), unsafe_allow_html=True)
             budget -= len(items)
         if budget < 0:
             rest = -budget
-            st.button(f"再顯示 {min(PAGE, rest)} 門（還有 {rest} 門）", on_click=apply,
+            st.button(t(f"再顯示 {min(PAGE, rest)} 門（還有 {rest} 門）",
+                        f"Show {min(PAGE, rest)} more ({rest} left)"), on_click=apply,
                       kwargs={"n_show": st.session_state.n_show + PAGE})
 
     # 選了星期或時段時，沒寫星期／時間的課無法確定是否符合：另外收在預設收合的區塊
     if shown_unsure:
-        with st.expander(f"另外 {len(shown_unsure)} 門時間沒寫，請打電話確認", expanded=False):
+        with st.expander(t(f"另外 {len(shown_unsure)} 門時間沒寫，請打電話確認",
+                           f"{len(shown_unsure)} more without a listed day or time — please call to confirm"),
+                         expanded=False):
             for title, items in sectioned(shown_unsure):
                 if items:
-                    st.markdown(f"#### {title} {len(items)} 門")
+                    st.markdown(f"#### {title}{t(' ', ' · ')}{n_courses(len(items))}")
                     st.markdown("".join(card(c) for c in items), unsafe_allow_html=True)
 
 # ── 地圖：行政區分層設色，預設放大到住的區和鄰近區 ──
@@ -771,20 +885,38 @@ with col_map, st.container(key="map_box"):
     if result.clicked:  # 點同一區＝取消，點別區＝換過去
         st.session_state.picked = None if result.clicked == picked else result.clicked
         st.rerun()
-    st.caption((f"黃色＝你住的{home}，淡黃＝相鄰的區，" if home else "")
-               + "灰色＝其他區，灰字 0＝沒有符合的課；區名下的數字是符合目前所有條件的課數。點一區只看那區的課，再點一次取消。")
+    st.caption(t((f"黃色＝你住的{home}，淡黃＝相鄰的區，" if home else "")
+                 + "灰色＝其他區，灰字 0＝沒有符合的課；區名下的數字是符合目前所有條件的課數。點一區只看那區的課，再點一次取消。",
+                 (f"Yellow = your district ({dist_label(home)}), light yellow = neighboring districts, " if home else "")
+                 + "gray = other districts, gray 0 = no matching classes. The number under each name is how many "
+                   "classes match all current filters. Tap a district to see only its classes; tap again to undo."))
 
 # ── 頁尾：關於這份資料 ──
-with st.expander("關於這份資料"):
+with st.expander(t("關於這份資料", "About this data")):
     by_source: dict[str, int] = {}
     for c in courses:
         by_source[c["source_type"]] = by_source.get(c["source_type"], 0) + 1
-    st.markdown("**資料來源**\n" + "".join(f"- {SOURCE_ZH.get(k, k)}：**{n}** 門\n" for k, n in by_source.items()))
-    st.markdown(f"- 中心：**{len({c['center'] for c in courses})}** / {len(centers)} 間\n"
-                f"- 課程：**{len(courses)}** 門（同一門課的重複公告已合併）\n"
-                f"- 沒寫日期、星期或時間：{sum(no_time(c) for c in courses)} 門\n"
-                f"- 資料更新：**{data_updated(COURSES.stat().st_mtime)}**（資料中最新一筆貼文或公告的日期）\n"
-                f"- 貼文日期：{min(c['post_date'] for c in courses)} ～ {max(c['post_date'] for c in courses)}")
-    st.caption("⚠ 表示原文沒寫日期或時間，或這個欄位是推論的（AI 讀圖或照月份展開日期），請點「原文」確認。"
-               if SHOW_INFERRED else "⚠ 表示原文沒寫上課日期或時間，請打電話向中心確認，或點「原文」看貼文。")
+    st.markdown(t("**資料來源**\n", "**Sources**\n") + "".join(
+        t(f"- {SOURCE_ZH.get(k, k)}：**{n}** 門\n", f"- {SOURCE_EN.get(k, k)}: **{n}**\n") for k, n in by_source.items()))
+    n_centers, n_no = len({c['center'] for c in courses}), sum(no_time(c) for c in courses)
+    upd, p0, p1 = (data_updated(COURSES.stat().st_mtime) or t("不明", "unknown"),
+                   min(c['post_date'] for c in courses), max(c['post_date'] for c in courses))
+    st.markdown(t(f"- 中心：**{n_centers}** / {len(centers)} 間\n"
+                  f"- 課程：**{len(courses)}** 門（同一門課的重複公告已合併）\n"
+                  f"- 沒寫日期、星期或時間：{n_no} 門\n"
+                  f"- 資料更新：**{upd}**（資料中最新一筆貼文或公告的日期）\n"
+                  f"- 貼文日期：{p0} ～ {p1}",
+                  f"- Centers: **{n_centers}** of {len(centers)}\n"
+                  f"- Classes: **{len(courses)}** (repeated announcements of the same class are merged)\n"
+                  f"- Missing date, day or time: {n_no}\n"
+                  f"- Data updated: **{upd}** (date of the newest post or notice in the data)\n"
+                  f"- Post dates: {p0} – {p1}\n"
+                  f"- Class names, centers and venues are shown as published, in Chinese."))
+    st.caption(t("⚠ 表示原文沒寫日期或時間，或這個欄位是推論的（AI 讀圖或照月份展開日期），請點「原文」確認。",
+                 "⚠ means the original post didn't list the date or time, or this field was inferred; "
+                 "tap “Original post” to check.")
+               if SHOW_INFERRED else
+               t("⚠ 表示原文沒寫上課日期或時間，請打電話向中心確認，或點「原文」看貼文。",
+                 "⚠ means the original post didn't list the date or time. Please call the center, "
+                 "or tap “Original post” to read it."))
 
