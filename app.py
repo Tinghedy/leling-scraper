@@ -112,16 +112,7 @@ district_map = st.components.v2.component("tainan_district_map", css=MAP_CSS, js
 WATCH_JS = """
 export default function() {
     const THRESH = 24;  // 累積捲動超過這麼多 px 才切換，避免手指微動就開開關關
-    const GAP_BELOW = 0;  // 摘要列和下面內容之間的額外留白（Streamlit 元素之間本來就有 16px）
-    const reserve = () => {  // 版面裡替摘要列留一格：收起時的高度＋上方 8px＋下方留白
-        const bar = document.querySelector(".st-key-summary_bar");
-        if (!bar || document.body.hasAttribute("data-bar-open")) return;
-        const row = bar.querySelector('[data-testid="stElementContainer"]');  // 第一列：摘要文字
-        const h = (row ? row.offsetHeight : 0) + 24 + 3 + 8 + GAP_BELOW;    // 上下 padding 24、框線 3、上方 8
-        document.documentElement.style.setProperty("--bar-h", h + "px");
-    };
     const update = (e) => {
-        reserve();
         const f = document.querySelector(".st-key-filters");
         const hidden = !!f && f.getBoundingClientRect().bottom < 90;  // 90px ≈ 上方工具列＋一點緩衝
         document.body.toggleAttribute("data-filters-hidden", hidden);
@@ -453,12 +444,11 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
 .st-key-w_lang button[aria-checked="false"] { background: var(--card) !important; }
 .st-key-w_lang button[aria-checked="true"] { background: var(--primary) !important; }
 .st-key-w_lang button[aria-checked="true"] p { font-weight: 700 !important; }
-/* 摘要列（目前條件＋門數）：平常藏起來，完整篩選區捲出畫面後才出現、釘在上方。
-   外層 stLayoutWrapper（主欄的直接子元素）設 sticky，並在版面裡佔一格「收起時的高度＋下方留白」
-   （高度由 WATCH_JS 量了寫進 --bar-h），摘要列出現時不會蓋住下面的結果列；
-   往上捲展開的標籤面板超出這一格，疊在內容上，下面的東西不會跟著跳 */
+/* 摘要列（目前條件＋門數＋標籤面板）：往下捲（在讀內容）時整條藏在頂端外，什麼都不遮；
+   往上捲（要改條件）才從頂端滑進來並展開標籤（見 WATCH_JS 的 data-bar-open）。
+   外層 stLayoutWrapper（主欄的直接子元素）設 sticky、高度 0，不佔版面 */
 [data-testid="stLayoutWrapper"]:has(> .st-key-summary_bar) { position: sticky; top: 3.75rem; z-index: 990;
-                                                             height: var(--bar-h, 0px); overflow: visible; }
+                                                             height: 0; overflow: visible; }
 /* 浮起來的圓角小卡：和頂端、下面內容都留距離，加陰影表示內容從它底下經過（不是一條線切過內容） */
 .st-key-summary_bar::before { content: ""; position: absolute; left: -24px; right: -24px; top: -11px; height: 10px;
                               background: var(--bg); }  /* 補滿和頂端工具列之間的縫，捲過去的內容不會從縫裡露出來 */
@@ -467,8 +457,8 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
                       box-shadow: 0 8px 24px rgba(36, 34, 35, 0.16), 0 2px 4px rgba(36, 34, 35, 0.08);
                       opacity: 0; visibility: hidden; transform: translateY(-8px);
                       transition: opacity .2s, transform .2s, visibility 0s .2s; }
-body[data-filters-hidden] .st-key-summary_bar { opacity: 1; visibility: visible; transform: none;
-                                                transition: opacity .2s, transform .2s; }
+body[data-bar-open] .st-key-summary_bar { opacity: 1; visibility: visible; transform: none;
+                                          transition: opacity .2s, transform .2s; }
 .st-key-scroll_watch, .st-key-filters_collapse { display: none !important; }
 /* 篩選標籤收起來後的那一行（COLLAPSE_JS）：平常藏著，收起來才出現；點了展開 */
 .f-summary { display: none; align-items: center; gap: 8px; flex-wrap: wrap; min-height: var(--tap);
@@ -495,10 +485,7 @@ body[data-bar-open] .st-key-bar_panel { grid-template-rows: 1fr; opacity: 1;
 .st-key-bar_panel_inner { padding-top: 8px; max-height: 60vh; overflow: hidden; }
 body[data-bar-open] .st-key-bar_panel_inner { overflow-y: auto; }  /* 收起來時不能捲，不然會吃掉頁面的捲動 */
 .st-key-bar_panel_inner .stButtonGroup label, .st-key-bar_panel_inner [data-testid="stWidgetLabel"] { margin-bottom: 0; }
-.summary .hint { color: var(--muted); font-size: 18px; white-space: nowrap; }
-body[data-bar-open] .summary .hint { display: none; }
 .summary .nowrap { white-space: nowrap; }
-@media (max-width: 640px) { .summary .hint { display: block; } .summary .hint .dot { display: none; } }
 @media (prefers-reduced-motion: reduce) {
   .st-key-bar_panel, body[data-bar-open] .st-key-bar_panel, .st-key-summary_bar { transition: none !important; } }
 .st-key-filters .stButtonGroup label, .st-key-filters [data-testid="stWidgetLabel"] { margin-bottom: 0; }
@@ -909,10 +896,7 @@ def summary_html() -> str:
               sep.join(map(pill_label, st.session_state.f_status))]
     parts = [dist_label(home) if home else t("全台南", "All of Tainan")] + [x for x in chosen if x]
     return (f'<p class="summary">{icon("location_on")}{html.escape(" · ".join(parts))}'
-            + ' · <span class="nowrap">' + t(f'符合 <b>{len(shown)}</b> 門', f'<b>{len(shown)}</b> match') + '</span>'
-            # 收起時提示怎麼展開（展開後用 CSS 藏起來；手機上自己一行）
-            + f'<span class="hint"><span class="dot"> · </span>{icon("swipe_down")}'
-              f'{t("往上滑可以改條件", "Scroll up to change filters")}</span></p>')
+            + ' · <span class="nowrap">' + t(f'符合 <b>{len(shown)}</b> 門', f'<b>{len(shown)}</b> match') + '</span></p>')
 
 
 # 釘在上方的篩選列（見 WATCH_JS）：完整篩選區捲出畫面後出現。
