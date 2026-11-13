@@ -142,14 +142,15 @@ export default function() {
 """
 scroll_watch = st.components.v2.component("filters_scroll_watch", js=WATCH_JS)
 
-# 篩選標籤自動收起：星期、時段、主題三組都點過、而且都有選中的標籤，最後一次點完停 IDLE 毫秒沒再點，
-# 就用 GSAP 把標籤區（.st-key-filters_body）收起來，原地換成一行摘要（.f-summary），點摘要再展開。
-#   - 停一下才收：標籤可複選，不能點一個就收。主題預設就是「全部」，所以要使用者自己點過主題才算選完。
+# 篩選標籤自動收起：星期、時段、主題三組都點過、而且都有選中的標籤，之後「滑鼠往下移」（手機是往下捲）
+# 就用 GSAP 把標籤區（.st-key-filters_body）收起來並捲到結果，原地換成一行摘要（.f-summary），點摘要再展開。
+#   - 看行為不看時間：往下移＝要去看結果了才收，點選中途（在三組之間移動）不會收。
+#     主題預設就是「全部」，所以要使用者自己點過主題才算選完。
 #   - 動畫都在瀏覽器裡跑，不經過 Python 重跑；收合狀態記在 <body data-f-collapsed>，重跑時不會被重設。
 #   - GSAP 從 CDN 載入（只是 JS 函式庫，不是 API）；載不到就不播動畫、直接收合。系統開了「減少動態效果」也不播。
 COLLAPSE_JS = """
 export default async function() {
-    const W = window.__lelingCollapse || (window.__lelingCollapse = { touched: new Set(), timer: null });
+    const W = window.__lelingCollapse || (window.__lelingCollapse = { touched: new Set(), armed: false, minY: 0, scrollSnap: new Map() });
     if (!W.gsapTried) {
         W.gsapTried = true;
         try { const m = await import("https://cdn.jsdelivr.net/npm/gsap@3.12.5/+esm"); W.gsap = m.gsap || m.default; }
@@ -157,7 +158,8 @@ export default async function() {
     }
     if (W.bound) return;  // 每次重跑都會呼叫，監聽和函式只設一次
     W.bound = true;
-    const IDLE = 1200;
+    const DOWN = 80;        // 點完標籤後，滑鼠往下移超過這麼多 px 才收（往下＝要去看結果）
+    const SCROLL_DOWN = 30; // 手機沒有滑鼠：改完往下捲超過這麼多 px 就收
     const GROUPS = { weekday: ".st-key-f_weekday", slot: ".st-key-f_slot", domain: ".st-key-w_domain" };
     const $ = (s) => document.querySelector(s);
     // 動畫要做在外層 stLayoutWrapper：容器本身是 flex: 1 1 0%，設 height 沒有用
@@ -189,6 +191,7 @@ export default async function() {
           .fromTo(sm, { opacity: 0, y: -8, scale: 0.98 }, { opacity: 1, y: 0, scale: 1, duration: 0.25, ease: "power2.out" }, "-=0.15");
     };
     const expand = () => {
+        W.armed = false;
         const el = panel();
         if (!el || !document.body.hasAttribute("data-f-collapsed")) return;
         el.style.height = el.offsetHeight + "px"; el.style.overflow = "hidden";  // 重跑換過元素時也從 0 開始長
@@ -201,16 +204,36 @@ export default async function() {
           .to(el, { height: el.scrollHeight, opacity: 1, duration: 0.3, ease: "power3.out" })
           .to(btns, { opacity: 1, y: 0, duration: 0.2, stagger: 0.008, ease: "power2.out", clearProps: "transform,opacity" }, "-=0.18");
     };
-    const schedule = () => {
-        clearTimeout(W.timer);
-        W.timer = setTimeout(() => { if (complete()) collapse(); }, IDLE);
+    const fire = () => {  // 往下移（或往下捲）了：三組都選好才收；條件在這一刻才驗，不吃點選當下的舊狀態
+        W.armed = false;
+        if (complete()) collapse();
     };
     document.addEventListener("click", (e) => {
         if (e.target.closest(".f-summary")) { expand(); return; }
         const b = e.target.closest("button");
         if (!b) return;
-        for (const [k, s] of Object.entries(GROUPS)) if (b.closest(s)) { W.touched.add(k); schedule(); }
+        for (const [k, s] of Object.entries(GROUPS)) if (b.closest(s)) {
+            W.touched.add(k);  // 每點一下標籤就重新佈防：從這個位置開始看滑鼠往哪移
+            W.armed = true; W.minY = e.clientY;
+            W.scrollSnap = new Map();  // 現在的捲動位置當基準（捲動可能一步到位，只發一個事件）
+            for (const sc of [document.scrollingElement, ...document.querySelectorAll('[data-testid="stMain"]')])
+                if (sc) W.scrollSnap.set(sc, sc.scrollTop);
+        }
     }, true);
+    document.addEventListener("mousemove", (e) => {
+        if (!W.armed) return;
+        if (e.clientY < W.minY) W.minY = e.clientY;        // 往上移就重新起算，只累積往下的距離
+        if (e.clientY - W.minY > DOWN) fire();
+    }, { passive: true });
+    document.addEventListener("scroll", (e) => {
+        if (!W.armed) return;
+        const el = e.target === document ? document.scrollingElement : e.target;
+        if (!el || typeof el.scrollTop !== "number") return;
+        if (el.closest && el.closest(".st-key-filters")) return;
+        let base = W.scrollSnap.get(el);
+        if (base === undefined || el.scrollTop < base) { W.scrollSnap.set(el, el.scrollTop); base = el.scrollTop; }
+        if (el.scrollTop - base > SCROLL_DOWN) fire();
+    }, { capture: true, passive: true });
     document.addEventListener("keydown", (e) => {
         if ((e.key === "Enter" || e.key === " ") && e.target.closest && e.target.closest(".f-summary")) { e.preventDefault(); expand(); }
     }, true);
@@ -744,7 +767,7 @@ with st.container(key="filters"):
                 unsafe_allow_html=True)
     # 選項一變就重跑：地圖數字和列表都用同一份 hits
     # 膠囊標籤可複選；手機上自動換行（不做左右滑動）
-    # 三組標籤都選好（停 1.2 秒沒再點）就用 GSAP 自動收起來（見 COLLAPSE_JS）
+    # 三組標籤都選好、滑鼠往下移（手機往下捲）就用 GSAP 自動收起來（見 COLLAPSE_JS）
     with st.container(key="filters_body"):
         st.pills(t("星期", "Day"), WEEKDAYS, selection_mode="multi", key="f_weekday", format_func=wd_label)
         st.pills(t("時段", "Time of day"), list(SLOTS), selection_mode="multi", key="f_slot", format_func=slot_label)
