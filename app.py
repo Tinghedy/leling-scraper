@@ -145,12 +145,13 @@ scroll_watch = st.components.v2.component("filters_scroll_watch", js=WATCH_JS)
 # 篩選標籤自動收起：星期、時段、主題三組都點過、而且都有選中的標籤，之後「滑鼠往下移」（手機是往下捲）
 # 就用 GSAP 把標籤區（.st-key-filters_body）收起來並捲到結果，原地換成一行摘要（.f-summary），點摘要再展開。
 #   - 看行為不看時間：往下移＝要去看結果了才收，點選中途（在三組之間移動）不會收。
-#     主題預設就是「全部」，所以要使用者自己點過主題才算選完。
+#     三組「都有選中」就算選完：主題預設的「全部」也算，不要求每組都親手點過。
+#     滑鼠還在篩選區裡（可能正要點下一組）不收，離開篩選區往下移才收。
 #   - 動畫都在瀏覽器裡跑，不經過 Python 重跑；收合狀態記在 <body data-f-collapsed>，重跑時不會被重設。
 #   - GSAP 從 CDN 載入（只是 JS 函式庫，不是 API）；載不到就不播動畫、直接收合。系統開了「減少動態效果」也不播。
 COLLAPSE_JS = """
 export default async function() {
-    const W = window.__lelingCollapse || (window.__lelingCollapse = { touched: new Set(), armed: false, minY: 0, scrollSnap: new Map() });
+    const W = window.__lelingCollapse || (window.__lelingCollapse = { armed: false, minY: 0, scrollSnap: new Map() });
     if (!W.gsapTried) {
         W.gsapTried = true;
         try { const m = await import("https://cdn.jsdelivr.net/npm/gsap@3.12.5/+esm"); W.gsap = m.gsap || m.default; }
@@ -175,7 +176,7 @@ export default async function() {
         c.querySelectorAll('[data-testid="stIconMaterial"], .material-icons, [translate="no"]').forEach((x) => x.remove());
         return c.innerText.trim();
     }).filter(Boolean);
-    const complete = () => Object.entries(GROUPS).every(([k, s]) => W.touched.has(k) && pressed(s).length);
+    const complete = () => Object.values(GROUPS).every((s) => pressed(s).length);
     const collapse = () => {
         const el = panel(), sm = summary();
         if (!el || !sm || document.body.hasAttribute("data-f-collapsed")) return;
@@ -204,16 +205,17 @@ export default async function() {
           .to(el, { height: el.scrollHeight, opacity: 1, duration: 0.3, ease: "power3.out" })
           .to(btns, { opacity: 1, y: 0, duration: 0.2, stagger: 0.008, ease: "power2.out", clearProps: "transform,opacity" }, "-=0.18");
     };
-    const fire = () => {  // 往下移（或往下捲）了：三組都選好才收；條件在這一刻才驗，不吃點選當下的舊狀態
+    const fire = () => {  // 往下移（或往下捲）了：三組都有選中才收；條件在這一刻才驗，不吃點選當下的舊狀態
+        if (!complete()) return;  // 還沒選滿就先不解除佈防，之後選滿再往下移還是會收
         W.armed = false;
-        if (complete()) collapse();
+        collapse();
     };
     document.addEventListener("click", (e) => {
         if (e.target.closest(".f-summary")) { expand(); return; }
         const b = e.target.closest("button");
         if (!b) return;
-        for (const [k, s] of Object.entries(GROUPS)) if (b.closest(s)) {
-            W.touched.add(k);  // 每點一下標籤就重新佈防：從這個位置開始看滑鼠往哪移
+        for (const s of Object.values(GROUPS)) if (b.closest(s)) {
+            // 每點一下標籤就重新佈防：從這個位置開始看滑鼠往哪移
             W.armed = true; W.minY = e.clientY;
             W.scrollSnap = new Map();  // 現在的捲動位置當基準（捲動可能一步到位，只發一個事件）
             for (const sc of [document.scrollingElement, ...document.querySelectorAll('[data-testid="stMain"]')])
@@ -223,7 +225,10 @@ export default async function() {
     document.addEventListener("mousemove", (e) => {
         if (!W.armed) return;
         if (e.clientY < W.minY) W.minY = e.clientY;        // 往上移就重新起算，只累積往下的距離
-        if (e.clientY - W.minY > DOWN) fire();
+        if (e.clientY - W.minY <= DOWN) return;
+        // 滑鼠還在篩選區（或開關）上＝可能正要點下一組，不收；離開篩選區往下才收
+        if (e.target && e.target.closest && e.target.closest('.st-key-filters, [data-testid="stCheckbox"], .stToggle')) return;
+        fire();
     }, { passive: true });
     document.addEventListener("scroll", (e) => {
         if (!W.armed) return;
