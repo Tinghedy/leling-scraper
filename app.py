@@ -105,24 +105,146 @@ export default function(component) {
 """
 district_map = st.components.v2.component("tainan_district_map", css=MAP_CSS, js=MAP_JS)
 
-# 捲動偵測：完整篩選區（.st-key-filters）捲出畫面後，在 <body> 加 data-filters-hidden，CSS 才把摘要列顯示出來；
-# 捲回去看得到篩選區時拿掉。Streamlit 本身抓不到捲動位置，所以用一個看不見的元件跑這段 JS。
+# 捲動偵測（Streamlit 本身抓不到捲動位置，所以用一個看不見的元件跑這段 JS），在 <body> 上切換兩個狀態：
+#   data-filters-hidden：完整篩選區（.st-key-filters）捲出畫面 → 顯示釘在上方的摘要列
+#   data-bar-open：摘要列出現後，往上捲（累積超過 THRESH）→ 展開標籤面板；往下捲 → 收起
+# 狀態放在 <body> 上，Streamlit 重跑（點了標籤）時不會被重設，面板維持展開。
 WATCH_JS = """
 export default function() {
-    const update = () => {
+    const THRESH = 24;  // 累積捲動超過這麼多 px 才切換，避免手指微動就開開關關
+    const update = (e) => {
         const f = document.querySelector(".st-key-filters");
         const hidden = !!f && f.getBoundingClientRect().bottom < 90;  // 90px ≈ 上方工具列＋一點緩衝
         document.body.toggleAttribute("data-filters-hidden", hidden);
+        if (!hidden) { document.body.removeAttribute("data-bar-open"); return; }
+        const el = !e || e.target === document ? document.scrollingElement : e.target;
+        if (!el || typeof el.scrollTop !== "number") return;
+        if (el.closest && el.closest(".st-key-summary_bar")) return;  // 面板自己的捲動不算
+        const w = window.__lelingScroll, y = el.scrollTop;
+        if (w.el !== el) { w.el = el; w.anchor = y; return; }
+        const open = document.body.hasAttribute("data-bar-open");
+        // 錨點記住「目前狀態下捲到最遠的位置」，只累積反方向的距離
+        if (open) {
+            if (y - w.anchor > THRESH) { document.body.removeAttribute("data-bar-open"); w.anchor = y; }
+            else if (y < w.anchor) w.anchor = y;
+        } else {
+            if (w.anchor - y > THRESH) { document.body.setAttribute("data-bar-open", ""); w.anchor = y; }
+            else if (y > w.anchor) w.anchor = y;
+        }
     };
-    if (!window.__lelingScrollWatch) {  // 每次重跑都會呼叫，監聽只掛一次
-        window.__lelingScrollWatch = true;
+    if (!window.__lelingScroll) {  // 每次重跑都會呼叫，監聽只掛一次
+        window.__lelingScroll = { el: null, anchor: 0 };
         document.addEventListener("scroll", update, { capture: true, passive: true });  // 捕捉任何捲動容器
-        window.addEventListener("resize", update);
+        window.addEventListener("resize", () => update());
     }
-    requestAnimationFrame(update);  // 重跑後版面可能變了，重新判斷一次
+    requestAnimationFrame(() => update());  // 重跑後版面可能變了，重新判斷一次
 }
 """
 scroll_watch = st.components.v2.component("filters_scroll_watch", js=WATCH_JS)
+
+# 篩選標籤自動收起：星期、時段、主題三組都點過、而且都有選中的標籤，之後「滑鼠往下移」（手機是往下捲）
+# 就用 GSAP 把標籤區（.st-key-filters_body）收起來並捲到結果，原地換成一行摘要（.f-summary），點摘要再展開。
+#   - 看行為不看時間：往下移＝要去看結果了才收，點選中途（在三組之間移動）不會收。
+#     三組「都有選中」就算選完：主題預設的「全部」也算，不要求每組都親手點過。
+#     滑鼠還在篩選區裡（可能正要點下一組）不收，離開篩選區往下移才收。
+#   - 動畫都在瀏覽器裡跑，不經過 Python 重跑；收合狀態記在 <body data-f-collapsed>，重跑時不會被重設。
+#   - GSAP 從 CDN 載入（只是 JS 函式庫，不是 API）；載不到就不播動畫、直接收合。系統開了「減少動態效果」也不播。
+COLLAPSE_JS = """
+export default async function() {
+    const W = window.__lelingCollapse || (window.__lelingCollapse = { armed: false, minY: 0, scrollSnap: new Map() });
+    if (!W.gsapTried) {
+        W.gsapTried = true;
+        try { const m = await import("https://cdn.jsdelivr.net/npm/gsap@3.12.5/+esm"); W.gsap = m.gsap || m.default; }
+        catch (e) { W.gsap = null; }
+    }
+    if (W.bound) return;  // 每次重跑都會呼叫，監聽和函式只設一次
+    W.bound = true;
+    const DOWN = 80;        // 點完標籤後，滑鼠往下移超過這麼多 px 才收（往下＝要去看結果）
+    const SCROLL_DOWN = 30; // 手機沒有滑鼠：改完往下捲超過這麼多 px 就收
+    const GROUPS = { weekday: ".st-key-f_weekday", slot: ".st-key-f_slot", domain: ".st-key-w_domain" };
+    const $ = (s) => document.querySelector(s);
+    // 動畫要做在外層 stLayoutWrapper：容器本身是 flex: 1 1 0%，設 height 沒有用
+    const panel = () => { const b = $(".st-key-filters_body"); return b && b.parentElement; };
+    const summary = () => $(".st-key-filters .f-summary");
+    const still = () => !W.gsap || matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const scrollToResults = () => {  // 收起後把畫面帶到結果列（桌機上地圖就在旁邊）；位置要等收合做完才量
+        const r = document.querySelector(".result-line");
+        if (r) r.scrollIntoView({ behavior: still() ? "auto" : "smooth", block: "start" });
+    };
+    const pressed = (sel) => [...document.querySelectorAll(sel + ' button[aria-pressed="true"]')].map((b) => {
+        const c = b.cloneNode(true);
+        c.querySelectorAll('[data-testid="stIconMaterial"], .material-icons, [translate="no"]').forEach((x) => x.remove());
+        return c.innerText.trim();
+    }).filter(Boolean);
+    const complete = () => Object.values(GROUPS).every((s) => pressed(s).length);
+    const collapse = () => {
+        const el = panel(), sm = summary();
+        if (!el || !sm || document.body.hasAttribute("data-f-collapsed")) return;
+        sm.querySelector(".f-text").textContent = Object.values(GROUPS).map((s) => pressed(s).join(sm.dataset.sep || "、")).join(" · ");
+        const h = el.offsetHeight;
+        el.style.height = h + "px"; el.style.overflow = "hidden";
+        document.body.setAttribute("data-f-collapsed", "");
+        if (still()) { el.style.height = "0px"; scrollToResults(); return; }
+        const g = W.gsap;
+        g.timeline({ onComplete: scrollToResults })
+          .to(el.querySelectorAll(".stButtonGroup button"), { opacity: 0, y: -6, duration: 0.15, stagger: 0.008, ease: "power1.in" })
+          .to(el, { height: 0, opacity: 0, duration: 0.3, ease: "power3.inOut" }, "-=0.05")
+          .fromTo(sm, { opacity: 0, y: -8, scale: 0.98 }, { opacity: 1, y: 0, scale: 1, duration: 0.25, ease: "power2.out" }, "-=0.15");
+    };
+    const expand = () => {
+        W.armed = false;
+        const el = panel();
+        if (!el || !document.body.hasAttribute("data-f-collapsed")) return;
+        el.style.height = el.offsetHeight + "px"; el.style.overflow = "hidden";  // 重跑換過元素時也從 0 開始長
+        document.body.removeAttribute("data-f-collapsed");
+        const done = () => { el.style.height = ""; el.style.overflow = ""; el.style.opacity = ""; };
+        if (still()) { done(); return; }
+        const g = W.gsap, btns = el.querySelectorAll(".stButtonGroup button");
+        g.set(btns, { opacity: 0, y: -6 });
+        g.timeline({ onComplete: done })
+          .to(el, { height: el.scrollHeight, opacity: 1, duration: 0.3, ease: "power3.out" })
+          .to(btns, { opacity: 1, y: 0, duration: 0.2, stagger: 0.008, ease: "power2.out", clearProps: "transform,opacity" }, "-=0.18");
+    };
+    const fire = () => {  // 往下移（或往下捲）了：三組都有選中才收；條件在這一刻才驗，不吃點選當下的舊狀態
+        if (!complete()) return;  // 還沒選滿就先不解除佈防，之後選滿再往下移還是會收
+        W.armed = false;
+        collapse();
+    };
+    document.addEventListener("click", (e) => {
+        if (e.target.closest(".f-summary")) { expand(); return; }
+        const b = e.target.closest("button");
+        if (!b) return;
+        for (const s of Object.values(GROUPS)) if (b.closest(s)) {
+            // 每點一下標籤就重新佈防：從這個位置開始看滑鼠往哪移
+            W.armed = true; W.minY = e.clientY;
+            W.scrollSnap = new Map();  // 現在的捲動位置當基準（捲動可能一步到位，只發一個事件）
+            for (const sc of [document.scrollingElement, ...document.querySelectorAll('[data-testid="stMain"]')])
+                if (sc) W.scrollSnap.set(sc, sc.scrollTop);
+        }
+    }, true);
+    document.addEventListener("mousemove", (e) => {
+        if (!W.armed) return;
+        if (e.clientY < W.minY) W.minY = e.clientY;        // 往上移就重新起算，只累積往下的距離
+        if (e.clientY - W.minY <= DOWN) return;
+        // 滑鼠還在篩選區（或開關）上＝可能正要點下一組，不收；離開篩選區往下才收
+        if (e.target && e.target.closest && e.target.closest('.st-key-filters, [data-testid="stCheckbox"], .stToggle')) return;
+        fire();
+    }, { passive: true });
+    document.addEventListener("scroll", (e) => {
+        if (!W.armed) return;
+        const el = e.target === document ? document.scrollingElement : e.target;
+        if (!el || typeof el.scrollTop !== "number") return;
+        if (el.closest && el.closest(".st-key-filters")) return;
+        let base = W.scrollSnap.get(el);
+        if (base === undefined || el.scrollTop < base) { W.scrollSnap.set(el, el.scrollTop); base = el.scrollTop; }
+        if (el.scrollTop - base > SCROLL_DOWN) fire();
+    }, { capture: true, passive: true });
+    document.addEventListener("keydown", (e) => {
+        if ((e.key === "Enter" || e.key === " ") && e.target.closest && e.target.closest(".f-summary")) { e.preventDefault(); expand(); }
+    }, true);
+}
+"""
+filters_collapse = st.components.v2.component("filters_collapse", js=COLLAPSE_JS)
 SHOW_INFERRED = False  # 清單裡要不要標「⚠ 推論（原文沒明寫）」；暫時隱藏
 STATUS_ZH = {"upcoming": "即將開課", "ongoing": "進行中", "ended": "已結束", "unknown": "日期沒寫"}
 # 結果列旁的狀態標籤（可複選；都不選＝不限）
@@ -291,6 +413,8 @@ h2, h3 { font-size: 26px !important; } h4 { font-size: 23px !important; }
 
 body, p, td, th, label { color: var(--text) !important; }
 .stApp { background: var(--bg); }
+/* 頂端工具列用實色底：不然捲到下面的字會從摘要列上方透出來 */
+[data-testid="stHeader"] { background: var(--bg) !important; }
 /* 黃色底上的文字一律墨色，不用白字 */
 button[kind^="primary"], button[kind^="primary"] p { color: var(--text) !important; }
 button[kind^="primary"] { background: var(--primary) !important; border: 1.5px solid var(--ink) !important; }
@@ -330,7 +454,7 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
   border-radius: 999px !important; padding: 0 20px !important; }
 .st-key-home_chip button p { font-weight: 700 !important; color: var(--text) !important; }
 .st-key-home_chip button p::before { content: "✓ "; }
-.result-line { font-size: 22px !important; margin: 0; }
+.result-line { font-size: 22px !important; margin: 0; scroll-margin-top: 5rem; }  /* 自動捲過來時留出頂端工具列 */
 .result-line b { font-size: 26px; }
 .result-line .sep { color: var(--muted); }
 /* 手機（≤ 640px）：地圖放在標題下方、「我住在」和篩選選項上面；桌機維持列表在左、地圖在右。
@@ -352,23 +476,50 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
 .st-key-w_lang button[aria-checked="false"] { background: var(--card) !important; }
 .st-key-w_lang button[aria-checked="true"] { background: var(--primary) !important; }
 .st-key-w_lang button[aria-checked="true"] p { font-weight: 700 !important; }
-/* 摘要列（目前條件＋門數＋「修改條件」）：平常藏起來，完整篩選區捲出畫面後才出現、釘在上方。
-   外層 stLayoutWrapper（主欄的直接子元素）設 sticky、高度 0，摘要列疊在內容上面，出現／消失都不會推動版面 */
+/* 摘要列（目前條件＋門數＋標籤面板）：往下捲（在讀內容）時整條藏在頂端外，什麼都不遮；
+   往上捲（要改條件）才從頂端滑進來並展開標籤（見 WATCH_JS 的 data-bar-open）。
+   外層 stLayoutWrapper（主欄的直接子元素）設 sticky、高度 0，不佔版面 */
 [data-testid="stLayoutWrapper"]:has(> .st-key-summary_bar) { position: sticky; top: 3.75rem; z-index: 990;
                                                              height: 0; overflow: visible; }
-.st-key-summary_bar { background: var(--bg); padding: 8px 0; border-bottom: 1.5px solid var(--ink);
-                      box-shadow: 0 4px 8px rgba(36, 34, 35, 0.12);
+/* 浮起來的圓角小卡：和頂端、下面內容都留距離，加陰影表示內容從它底下經過（不是一條線切過內容） */
+.st-key-summary_bar::before { content: ""; position: absolute; left: -24px; right: -24px; top: -11px; height: 10px;
+                              background: var(--bg); }  /* 補滿和頂端工具列之間的縫，捲過去的內容不會從縫裡露出來 */
+.st-key-summary_bar { position: relative; background: var(--card); padding: 12px 18px; margin-top: 8px;
+                      border: 1.5px solid var(--ink); border-radius: 16px;
+                      box-shadow: 0 8px 24px rgba(36, 34, 35, 0.16), 0 2px 4px rgba(36, 34, 35, 0.08);
                       opacity: 0; visibility: hidden; transform: translateY(-8px);
                       transition: opacity .2s, transform .2s, visibility 0s .2s; }
-body[data-filters-hidden] .st-key-summary_bar { opacity: 1; visibility: visible; transform: none;
-                                                transition: opacity .2s, transform .2s; }
-.st-key-scroll_watch { display: none !important; }
+body[data-bar-open] .st-key-summary_bar { opacity: 1; visibility: visible; transform: none;
+                                          transition: opacity .2s, transform .2s; }
+.st-key-scroll_watch, .st-key-filters_collapse { display: none !important; }
+/* 篩選標籤收起來後的那一行（COLLAPSE_JS）：平常藏著，收起來才出現；點了展開 */
+.f-summary { display: none; align-items: center; gap: 8px; flex-wrap: wrap; min-height: var(--tap);
+  padding: 6px 8px 6px 16px; background: var(--soft); border: 1.5px solid var(--ink); border-radius: 16px; cursor: pointer; }
+body[data-f-collapsed] .f-summary { display: flex; }
+.f-summary .f-text { font-weight: 700; flex: 1 1 12rem; min-width: 0; }  /* 窄螢幕：圖示和文字同一行，「修改」換下一行 */
+.f-summary .f-edit { display: inline-flex; align-items: center; gap: 2px; min-height: 40px; padding: 0 14px;
+  background: var(--card); border: 1.5px solid var(--ink); border-radius: 999px; font-weight: 700; white-space: nowrap; }
+.f-summary:hover .f-edit, .f-summary:focus-visible .f-edit { background: var(--primary); }
+.f-summary:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+body[data-f-collapsed] [data-testid="stLayoutWrapper"]:has(> .st-key-filters_body) { height: 0; overflow: hidden; opacity: 0; }  /* 重跑後新的元素也維持收起 */
 .summary { margin: 0; font-size: 20px !important; }
 .summary .ms { vertical-align: -5px; margin-right: 4px; }
 .summary b { font-size: 22px; }
-.st-key-summary_bar [data-testid="stPopover"] button { min-height: var(--tap); border-radius: 999px !important;
-  background: var(--primary) !important; border: 1.5px solid var(--ink) !important; padding: 0 18px !important; }
-.st-key-summary_bar [data-testid="stPopover"] button p { font-weight: 700 !important; color: var(--text) !important; }
+/* 往上捲時展開的標籤面板：grid-template-rows 0fr → 1fr 做真正的高度動畫（下面的東西不會瞬間跳），
+   收 0.2 秒、開 0.25 秒，先快後慢；系統開了「減少動態效果」就直接切換 */
+.st-key-summary_bar { gap: 0 !important; flex: 0 0 auto !important; }  /* 不要被外層留的那一格撐高 */
+.st-key-summary_bar [data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
+.st-key-bar_panel { display: grid !important; grid-template-rows: 0fr; opacity: 0;
+  transition: grid-template-rows .2s cubic-bezier(.4, 0, .2, 1), opacity .15s ease-out; }
+.st-key-bar_panel > * { min-height: 0; overflow: hidden; }
+body[data-bar-open] .st-key-bar_panel { grid-template-rows: 1fr; opacity: 1;
+  transition: grid-template-rows .25s cubic-bezier(.2, 0, 0, 1), opacity .2s ease-out .05s; }
+.st-key-bar_panel_inner { padding-top: 8px; max-height: 60vh; overflow: hidden; }
+body[data-bar-open] .st-key-bar_panel_inner { overflow-y: auto; }  /* 收起來時不能捲，不然會吃掉頁面的捲動 */
+.st-key-bar_panel_inner .stButtonGroup label, .st-key-bar_panel_inner [data-testid="stWidgetLabel"] { margin-bottom: 0; }
+.summary .nowrap { white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) {
+  .st-key-bar_panel, body[data-bar-open] .st-key-bar_panel, .st-key-summary_bar { transition: none !important; } }
 .st-key-filters .stButtonGroup label, .st-key-filters [data-testid="stWidgetLabel"] { margin-bottom: 0; }
 .stButtonGroup [role="toolbar"] { flex-wrap: wrap !important; gap: var(--gap) !important; }
 a { color: var(--text) !important; text-decoration: underline; }
@@ -614,13 +765,20 @@ with st.container(key="filters"):
     home = st.session_state.home
 
     st.markdown(t("**篩選條件**", "**Filters**"))
+    # 收起來時顯示的那一行：文字由 COLLAPSE_JS 從選中的標籤組出來，點了就展開
+    st.markdown(f'<div class="f-summary" data-sep="{t("、", ", ")}" role="button" tabindex="0" aria-label="{t("展開篩選條件", "Show filters")}">'
+                f'<span class="ms" aria-hidden="true">tune</span><span class="f-text"></span>'
+                f'<span class="f-edit">{t("修改", "Edit")}<span class="ms" aria-hidden="true">expand_more</span></span></div>',
+                unsafe_allow_html=True)
     # 選項一變就重跑：地圖數字和列表都用同一份 hits
-    # 手機寬度（< 640px）Streamlit 會把 columns 改成直向排列
     # 膠囊標籤可複選；手機上自動換行（不做左右滑動）
-    st.pills(t("星期", "Day"), WEEKDAYS, selection_mode="multi", key="f_weekday", format_func=wd_label)
-    st.pills(t("時段", "Time of day"), list(SLOTS), selection_mode="multi", key="f_slot", format_func=slot_label)
-    st.pills(t("主題", "Topic"), [ALL, *DOMAINS], selection_mode="multi", key="w_domain", on_change=sync_domain,
-             args=("w_domain",), format_func=lambda d: f":material/{DOMAIN_ICONS[d]}: {dom_label(d)}")
+    # 三組標籤都選好、滑鼠往下移（手機往下捲）就用 GSAP 自動收起來（見 COLLAPSE_JS）
+    with st.container(key="filters_body"):
+        st.pills(t("星期", "Day"), WEEKDAYS, selection_mode="multi", key="f_weekday", format_func=wd_label)
+        st.pills(t("時段", "Time of day"), list(SLOTS), selection_mode="multi", key="f_slot", format_func=slot_label)
+        st.pills(t("主題", "Topic"), [ALL, *DOMAINS], selection_mode="multi", key="w_domain", on_change=sync_domain,
+                 args=("w_domain",), format_func=lambda d: f":material/{DOMAIN_ICONS[d]}: {dom_label(d)}")
+filters_collapse(key="filters_collapse")
 
 st.toggle(t("顯示已結束的課", "Show ended classes"), key="f_show_ended")
 if st.session_state.home:
@@ -770,18 +928,21 @@ def summary_html() -> str:
               sep.join(map(pill_label, st.session_state.f_status))]
     parts = [dist_label(home) if home else t("全台南", "All of Tainan")] + [x for x in chosen if x]
     return (f'<p class="summary">{icon("location_on")}{html.escape(" · ".join(parts))}'
-            + t(f' · 符合 <b>{len(shown)}</b> 門</p>', f' · <b>{len(shown)}</b> match</p>'))
+            + ' · <span class="nowrap">' + t(f'符合 <b>{len(shown)}</b> 門', f'<b>{len(shown)}</b> match') + '</span></p>')
 
 
-# 釘在上方的摘要列：完整篩選區捲出畫面後才出現（見 WATCH_JS），按「修改條件」直接改，不用捲回頂端
+# 釘在上方的篩選列（見 WATCH_JS）：完整篩選區捲出畫面後出現。
+#   往下捲＝收成一行摘要；往上捲＝標籤從這一行滑下來展開，可以直接改條件，不用捲回頂端。
+#   收合／展開只在瀏覽器裡用 CSS 動畫切換（不經過 Python 重跑），所以很快。
 scroll_watch(key="scroll_watch")
-with st.container(key="summary_bar", horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
-    st.markdown(summary_html(), unsafe_allow_html=True, width="content")
+with st.container(key="summary_bar"):
+    st.markdown(summary_html(), unsafe_allow_html=True)
     # 面板裡的標籤每次重跑前先對齊目前的條件（頁面上的標籤改了，這裡也要跟著）
     st.session_state.pop_weekday = list(st.session_state.f_weekday)
     st.session_state.pop_slot = list(st.session_state.f_slot)
     st.session_state.pop_domain = list(st.session_state.w_domain)
-    with st.popover(t("修改條件", "Change filters"), icon=":material/tune:"):
+    # 兩層容器：外層用 grid 0fr ↔ 1fr 做高度動畫，內層是實際內容
+    with st.container(key="bar_panel"), st.container(key="bar_panel_inner"):
         st.pills(t("星期", "Day"), WEEKDAYS, selection_mode="multi", key="pop_weekday", format_func=wd_label,
                  on_change=from_popover, args=("weekday",))
         st.pills(t("時段", "Time of day"), list(SLOTS), selection_mode="multi", key="pop_slot", format_func=slot_label,
