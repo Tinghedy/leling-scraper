@@ -164,6 +164,10 @@ export default async function() {
     const panel = () => { const b = $(".st-key-filters_body"); return b && b.parentElement; };
     const summary = () => $(".st-key-filters .f-summary");
     const still = () => !W.gsap || matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const scrollToResults = () => {  // 收起後把畫面帶到結果列（桌機上地圖就在旁邊）；位置要等收合做完才量
+        const r = document.querySelector(".result-line");
+        if (r) r.scrollIntoView({ behavior: still() ? "auto" : "smooth", block: "start" });
+    };
     const pressed = (sel) => [...document.querySelectorAll(sel + ' button[aria-pressed="true"]')].map((b) => {
         const c = b.cloneNode(true);
         c.querySelectorAll('[data-testid="stIconMaterial"], .material-icons, [translate="no"]').forEach((x) => x.remove());
@@ -177,9 +181,9 @@ export default async function() {
         const h = el.offsetHeight;
         el.style.height = h + "px"; el.style.overflow = "hidden";
         document.body.setAttribute("data-f-collapsed", "");
-        if (still()) { el.style.height = "0px"; return; }
+        if (still()) { el.style.height = "0px"; scrollToResults(); return; }
         const g = W.gsap;
-        g.timeline()
+        g.timeline({ onComplete: scrollToResults })
           .to(el.querySelectorAll(".stButtonGroup button"), { opacity: 0, y: -6, duration: 0.15, stagger: 0.008, ease: "power1.in" })
           .to(el, { height: 0, opacity: 0, duration: 0.3, ease: "power3.inOut" }, "-=0.05")
           .fromTo(sm, { opacity: 0, y: -8, scale: 0.98 }, { opacity: 1, y: 0, scale: 1, duration: 0.25, ease: "power2.out" }, "-=0.15");
@@ -422,7 +426,7 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
   border-radius: 999px !important; padding: 0 20px !important; }
 .st-key-home_chip button p { font-weight: 700 !important; color: var(--text) !important; }
 .st-key-home_chip button p::before { content: "✓ "; }
-.result-line { font-size: 22px !important; margin: 0; }
+.result-line { font-size: 22px !important; margin: 0; scroll-margin-top: 5rem; }  /* 自動捲過來時留出頂端工具列 */
 .result-line b { font-size: 26px; }
 .result-line .sep { color: var(--muted); }
 /* 手機（≤ 640px）：地圖放在標題下方、「我住在」和篩選選項上面；桌機維持列表在左、地圖在右。
