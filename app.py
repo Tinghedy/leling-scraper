@@ -112,7 +112,16 @@ district_map = st.components.v2.component("tainan_district_map", css=MAP_CSS, js
 WATCH_JS = """
 export default function() {
     const THRESH = 24;  // 累積捲動超過這麼多 px 才切換，避免手指微動就開開關關
+    const GAP_BELOW = 0;  // 摘要列和下面內容之間的額外留白（Streamlit 元素之間本來就有 16px）
+    const reserve = () => {  // 版面裡替摘要列留一格：收起時的高度＋上方 8px＋下方留白
+        const bar = document.querySelector(".st-key-summary_bar");
+        if (!bar || document.body.hasAttribute("data-bar-open")) return;
+        const row = bar.querySelector('[data-testid="stElementContainer"]');  // 第一列：摘要文字
+        const h = (row ? row.offsetHeight : 0) + 24 + 3 + 8 + GAP_BELOW;    // 上下 padding 24、框線 3、上方 8
+        document.documentElement.style.setProperty("--bar-h", h + "px");
+    };
     const update = (e) => {
+        reserve();
         const f = document.querySelector(".st-key-filters");
         const hidden = !!f && f.getBoundingClientRect().bottom < 90;  // 90px ≈ 上方工具列＋一點緩衝
         document.body.toggleAttribute("data-filters-hidden", hidden);
@@ -444,10 +453,12 @@ button[kind^="primary"] { background: var(--primary) !important; border: 1.5px s
 .st-key-w_lang button[aria-checked="false"] { background: var(--card) !important; }
 .st-key-w_lang button[aria-checked="true"] { background: var(--primary) !important; }
 .st-key-w_lang button[aria-checked="true"] p { font-weight: 700 !important; }
-/* 摘要列（目前條件＋門數＋「修改條件」）：平常藏起來，完整篩選區捲出畫面後才出現、釘在上方。
-   外層 stLayoutWrapper（主欄的直接子元素）設 sticky、高度 0，摘要列疊在內容上面，出現／消失都不會推動版面 */
+/* 摘要列（目前條件＋門數）：平常藏起來，完整篩選區捲出畫面後才出現、釘在上方。
+   外層 stLayoutWrapper（主欄的直接子元素）設 sticky，並在版面裡佔一格「收起時的高度＋下方留白」
+   （高度由 WATCH_JS 量了寫進 --bar-h），摘要列出現時不會蓋住下面的結果列；
+   往上捲展開的標籤面板超出這一格，疊在內容上，下面的東西不會跟著跳 */
 [data-testid="stLayoutWrapper"]:has(> .st-key-summary_bar) { position: sticky; top: 3.75rem; z-index: 990;
-                                                             height: 0; overflow: visible; }
+                                                             height: var(--bar-h, 0px); overflow: visible; }
 /* 浮起來的圓角小卡：和頂端、下面內容都留距離，加陰影表示內容從它底下經過（不是一條線切過內容） */
 .st-key-summary_bar::before { content: ""; position: absolute; left: -24px; right: -24px; top: -11px; height: 10px;
                               background: var(--bg); }  /* 補滿和頂端工具列之間的縫，捲過去的內容不會從縫裡露出來 */
@@ -474,7 +485,7 @@ body[data-f-collapsed] [data-testid="stLayoutWrapper"]:has(> .st-key-filters_bod
 .summary b { font-size: 22px; }
 /* 往上捲時展開的標籤面板：grid-template-rows 0fr → 1fr 做真正的高度動畫（下面的東西不會瞬間跳），
    收 0.2 秒、開 0.25 秒，先快後慢；系統開了「減少動態效果」就直接切換 */
-.st-key-summary_bar { gap: 0 !important; }
+.st-key-summary_bar { gap: 0 !important; flex: 0 0 auto !important; }  /* 不要被外層留的那一格撐高 */
 .st-key-summary_bar [data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
 .st-key-bar_panel { display: grid !important; grid-template-rows: 0fr; opacity: 0;
   transition: grid-template-rows .2s cubic-bezier(.4, 0, .2, 1), opacity .15s ease-out; }
